@@ -33,6 +33,183 @@ kk risk
 kk status
 ```
 
+## First-Run Playbook
+
+Follow this every time you encounter a project where `kk` hasn't been set up, or where `.kodeklarity/config.json` has no `customBoundaries`.
+
+### Step 1: Build the initial graph
+
+```bash
+kk init --json
+```
+
+Check the output:
+- `nodes_by_kind` — what was discovered (routes, server_actions, tables, etc.)
+- `edges_by_type` — what connections exist
+- `gaps` — files with patterns kk couldn't resolve
+
+### Step 2: Find the project's architectural layers
+
+The initial graph only finds framework-level boundaries (routes, server actions, tables, jobs). Most projects have intermediate layers between these that kk doesn't know about yet.
+
+**Read the project structure to find them:**
+
+```bash
+ls src/lib/        # or src/, app/, packages/
+ls src/services/   # service layer?
+ls src/queries/    # query/repository layer?
+ls src/lib/        # common Next.js pattern
+```
+
+**Common patterns to look for:**
+
+| What you see | Config `kind` | Typical glob |
+|---|---|---|
+| `src/lib/queries/*.ts` or `src/queries/*.ts` or `src/repositories/*.ts` | `query` | Whatever path you found |
+| `src/lib/services/*.ts` or `src/services/*.ts` | `service` | Whatever path you found |
+| `src/lib/validations/*.ts` or `src/schemas/*.ts` | `validator` | Whatever path you found |
+| `src/middleware/*.ts` or `src/lib/middleware/*.ts` | `middleware` | Whatever path you found |
+| `src/lib/hooks/*.ts` or `src/hooks/*.ts` | `hook` | Whatever path you found |
+| `src/lib/utils/*.ts` — SKIP this. Utility files are too generic, they'll add noise. | | |
+
+**The names and paths are different in every project.** Don't assume `src/lib/queries/`. Read the actual directory structure and find where the project puts its data access, business logic, and validation code.
+
+### Step 3: Update config with what you found
+
+Edit `.kodeklarity/config.json` and add `customBoundaries` for each layer you discovered:
+
+```json
+{
+  "customBoundaries": [
+    {
+      "name": "query-layer",
+      "kind": "query",
+      "glob": "<actual path you found>/*.ts",
+      "symbolPattern": "export (async )?function",
+      "reason": "Data access / query layer"
+    },
+    {
+      "name": "services",
+      "kind": "service",
+      "glob": "<actual path you found>/*.ts",
+      "symbolPattern": "export (async )?function",
+      "reason": "Business logic layer"
+    }
+  ]
+}
+```
+
+### Step 4: Rebuild and verify
+
+```bash
+kk rebuild --force
+```
+
+Check the new graph:
+- Node count should increase (new layers discovered)
+- Edge count should increase (new connections through those layers)
+
+### Step 5: Test with a known function
+
+Pick a function you know is important (a server action, an API handler) and test:
+
+```bash
+kk impact <function_name> --depth 3
+```
+
+**Check the output for quality:**
+
+- **Good sign:** You see connections to services, queries, tables, and pages. The chain makes sense.
+- **Bad sign: Missing layers** — you see `server_action → table` but no service or query in between. **Config fix:** Add customBoundaries for the missing layers.
+- **Bad sign: Zero connections** — the symbol isn't in the graph. **Config fix:** Check if the file containing it is covered by an adapter or customBoundary. Add one if not.
+- **Bad sign: Too many connections** (thousands) — this is likely a code-level issue in kk's tracer, not something config can fix. Report it.
+
+### What config can and can't fix
+
+**Config fixes (agent can solve):**
+- Missing nodes (routes, services, queries not showing up) → add `customBoundaries` with correct glob for this project
+- Wrong adapters on workspace packages → override `workspaces.[pkg].adapters`
+- Imports not resolving → add `importAliases`
+- Traversal not deep enough → increase `trace.maxDepth`
+
+**Code bugs in kk (agent can't fix via config):**
+- Query returns 0 even though nodes and edges exist in the graph → kk query bug
+- Way too many edges (38k+ `uses_table`) → kk tracer bug
+- Side-effects returns 0 when impact shows table connections → kk query filter bug
+
+**How to tell the difference:** Run `kk status` to check if nodes and edges exist. If they do, but queries return wrong results, it's a kk bug. If nodes or edges are missing, it's a config issue.
+
+**When you find a kk bug:**
+
+1. Search existing issues first:
+   ```bash
+   gh search issues --repo kodeklarity/kodeklarity "<short description of the bug>"
+   ```
+
+2. If no matching issue exists, file one:
+   ```bash
+   gh issue create --repo kodeklarity/kodeklarity \
+     --title "Bug: <short description>" \
+     --body "## What happened
+   <describe the problem>
+
+   ## Expected
+   <what should have happened>
+
+   ## Steps to reproduce
+   1. kk init on a project with <relevant detail>
+   2. kk <command> <args>
+   3. Got: <actual result>
+   4. Expected: <expected result>
+
+   ## Graph context
+   - Nodes: <count from kk status>
+   - Edges: <count from kk status>
+   - Edge types: <relevant types>
+   - Node kinds involved: <relevant kinds>
+
+   Filed by AI agent during first-run playbook."
+   ```
+
+3. Note the issue in a comment in `.kodeklarity/config.json` or tell the developer, then continue with whatever config fixes you can make.
+
+### Step 6: Test side-effects and upstream
+
+```bash
+kk side-effects <function_name> --depth 4
+kk upstream <table_name> --depth 2
+```
+
+- `side-effects` should show tables, external APIs, events, and background jobs reachable from the function
+- `upstream` should show which routes, actions, and services depend on the symbol
+
+If `side-effects` returns 0 for a function that clearly touches the database, the connection chain is missing. Add customBoundaries for the intermediate layer (the query/repository functions that actually call the ORM).
+
+### Step 7: Commit the config (optional)
+
+If the project team wants to share the graph configuration:
+
+```bash
+# Remove .kodeklarity/ from .gitignore (or just config.json)
+# The graph.sqlite should stay gitignored — it's regenerated by kk init
+git add .kodeklarity/config.json
+git commit -m "Add KodeKlarity graph config"
+```
+
+### Summary of what the agent does on first run
+
+```
+1. kk init                          → build initial graph
+2. Read project structure            → find intermediate layers
+3. Edit .kodeklarity/config.json     → add customBoundaries  
+4. kk rebuild --force                → rebuild with new layers
+5. kk impact <known_function>        → verify quality
+6. kk side-effects <known_function>  → verify depth
+7. Fix any issues → repeat 3-6       → iterate until graph is useful
+```
+
+This whole process takes 2-3 minutes. After that, `kk rebuild` keeps the graph up to date incrementally.
+
 ## Commands
 
 ### `kk init [--force] [--json]`

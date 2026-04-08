@@ -616,7 +616,7 @@ SELECT
 FROM walk w
 LEFT JOIN nodes nf ON nf.feature_name = @feature AND nf.node_id = w.from_node_id
 LEFT JOIN nodes nt ON nt.feature_name = @feature AND nt.node_id = w.to_node_id
-WHERE nt.kind = 'side_effect'
+WHERE nt.kind IN ('side_effect', 'table', 'external_api', 'event', 'background_job', 'rls_policy')
 ORDER BY w.depth, w.from_node_id, w.to_node_id;
 `
       )

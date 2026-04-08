@@ -100,10 +100,24 @@ export async function traceImportEdges(options: TraceOptions): Promise<TraceResu
       // Check if this file contains boundary nodes
       const targetNodes = nodesByFile.get(current.absPath);
       if (targetNodes) {
-        // Create edges from source nodes to target nodes
+        // Get which symbols were actually imported from this file
+        const importedSymbols = getImportedSymbols(fileCache.get(sourceFile), current.chain, fileCache);
+
         for (const sn of sourceNodes) {
           for (const tn of targetNodes) {
-            if (sn.id === tn.id) continue; // Don't self-link
+            if (sn.id === tn.id) continue;
+
+            // For files with many nodes (like schema files with 60+ tables),
+            // only connect if the specific symbol was imported.
+            // This prevents the cartesian product problem.
+            if (targetNodes.length > 5 && importedSymbols.size > 0) {
+              if (!importedSymbols.has(tn.symbol) && !importedSymbols.has("*")) continue;
+            }
+
+            // For multi-hop chains to table/schema nodes, skip —
+            // the type tracer handles these with precision
+            if (current.depth > 1 && (tn.kind === "table" || tn.kind === "rls_policy")) continue;
+
             const edgeKey = `${sn.id}→${tn.id}`;
             if (seenEdges.has(edgeKey)) continue;
             seenEdges.add(edgeKey);
@@ -373,6 +387,42 @@ function inferEdgeType(source: BoundaryNode, target: BoundaryNode, depth: number
   if (tk === "context") return "uses_context";
 
   return "imports";
+}
+
+/**
+ * Get which symbols were specifically imported from the first hop in the chain.
+ * Used to filter connections to files with many nodes (like schema with 62 tables).
+ */
+function getImportedSymbols(
+  sourceInfo: FileInfo | undefined,
+  chain: string[],
+  fileCache: Map<string, FileInfo>
+): Set<string> {
+  const symbols = new Set<string>();
+  if (!sourceInfo || chain.length < 2) return symbols;
+
+  // Check what the source file imports from the first file in the chain
+  for (const imp of sourceInfo.imports) {
+    if (imp.isTypeOnly) continue;
+    for (const sym of imp.importedSymbols) {
+      symbols.add(sym);
+    }
+  }
+
+  // If the chain is longer, also check intermediate files
+  if (chain.length > 2) {
+    const intermediateInfo = fileCache.get(chain[1]);
+    if (intermediateInfo) {
+      for (const imp of intermediateInfo.imports) {
+        if (imp.isTypeOnly) continue;
+        for (const sym of imp.importedSymbols) {
+          symbols.add(sym);
+        }
+      }
+    }
+  }
+
+  return symbols;
 }
 
 function findImportLine(info: FileInfo | undefined, chain: string[]): number {
