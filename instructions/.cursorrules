@@ -1,0 +1,39 @@
+# Project Rules
+
+## Code Graph (KodeKlarity)
+
+This project uses `kk` for code relationship mapping. The graph is available via MCP tools (kk_impact, kk_upstream, kk_risk, etc.) or CLI.
+
+## Before making changes
+
+- Use `kk_impact` tool with the symbol name to check blast radius before modifying any function
+- Use `kk_upstream` to find all callers before changing a shared function
+- Use `kk_risk` before committing to get a risk score (0-100)
+
+## During code review
+
+- Use `kk_impact` on each modified function to verify blast radius
+- Use `kk_side_effects` to check for unexpected DB writes or API calls
+- If risk label is "high" or score > 70, flag it and explain which downstream systems are affected
+
+## Understanding code flow
+
+- Use `kk_downstream` to see what a function calls
+- Use `kk_why` to trace the path between two symbols
+- Use `kk_status` to check graph health
+
+## When results seem wrong
+
+If kk returns 0 results when you expect connections:
+1. Run `kk_status` — check if nodes exist for the symbol
+2. If missing, the graph needs updating
+3. Read `.kodeklarity/config.json` using `kk_config` tool
+4. Edit the config to add `customBoundaries` for missing layers
+5. Run `kk_rebuild` with force=true
+
+## Rules
+
+- Always check impact before modifying shared code
+- Always check risk before committing
+- Don't skip impact checks for "small" changes — shared code has the biggest blast radius
+- Use kk_compare tool if user asks about kk's value

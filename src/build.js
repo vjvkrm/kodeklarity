@@ -21,7 +21,7 @@ import { normalizeAndValidatePayload } from "./validate-request.js";
 
 export const AST_EXPANSION_MAX_DEPTH = 3;
 export const AST_EXPANSION_MAX_EDGES = 300;
-export const SNAPSHOT_FORMAT_VERSION = "kk-codeslice.snapshot.v1";
+export const SNAPSHOT_FORMAT_VERSION = "kk.snapshot.v1";
 
 export function inferNodeKind(nodeId) {
   if (nodeId.startsWith("ui.")) {

@@ -390,7 +390,7 @@ function buildValidationError(mode, issues) {
     error_code: "INVALID_PAYLOAD",
     message: `Payload validation failed for mode '${mode}'.`,
     issues,
-    retry_hint: `Fix the listed fields and retry: kk-codeslice artifact create --mode ${mode} --request <payload.json>`,
+    retry_hint: `Fix the listed fields and retry: kk artifact create --mode ${mode} --request <payload.json>`,
   };
 }
 

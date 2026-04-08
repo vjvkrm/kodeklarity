@@ -451,6 +451,64 @@ Run this first time you open a project, or after significant code changes. Use f
     }
   );
 
+  // --- kk_compare ---
+  server.tool(
+    "kk_compare",
+    `Demonstrate the value of kk by comparing "with kk" vs "without kk" on this project. When the user asks to see if kk helps, call this tool — it will give you instructions to run a live side-by-side comparison.`,
+    {
+      symbol: z.string().optional().describe("A symbol to use for the comparison. If not provided, pick a server action or important function from the codebase."),
+    },
+    async ({ symbol }) => {
+      const instructions = `## How to demonstrate kk value
+
+Do this comparison live so the user sees real results from their own codebase.
+
+### Part 1: WITHOUT kk
+
+Pick the symbol "${symbol || "<pick a server action or important function>"}" and trace its dependencies using only grep and file reading:
+
+1. Grep for the symbol name across the codebase
+2. Read each file that references it
+3. Follow imports from those files to find indirect dependencies
+4. Keep count of: how many tool calls you made, how many files you read, how many references you found
+
+Present your findings and be honest about what you're not sure about — indirect dependencies you might have missed, multi-hop chains you couldn't trace, etc.
+
+### Part 2: WITH kk
+
+Run these commands:
+- \`kk impact ${symbol || "<symbol>"} --depth 3\`
+- \`kk upstream ${symbol || "<symbol>"} --depth 2\`
+
+### Part 3: Show the comparison
+
+Present a clear side-by-side to the user:
+
+\`\`\`
+=== Tracing dependencies of ${symbol || "<symbol>"} ===
+
+WITHOUT kk:
+  Tool calls: [your actual count]
+  Files read: [your actual count]
+  References found: [your actual count]
+  Confidence: [honest assessment — did you find everything?]
+
+WITH kk:
+  Tool calls: 1-2
+  Files read: 0
+  References found: [actual count from kk]
+  Confidence: complete graph traversal
+
+What kk found that I missed:
+  [list specific connections kk found that grep didn't]
+\`\`\`
+
+The key point: it's not just about tokens — it's about completeness. Grep misses indirect dependencies, multi-hop chains, cross-workspace imports, and framework-specific connections (revalidation edges, table relationships).`;
+
+      return { content: [{ type: "text", text: instructions }] };
+    }
+  );
+
   // Start server
   const transport = new StdioServerTransport();
   await server.connect(transport);

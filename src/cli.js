@@ -25,52 +25,25 @@ import { handleRebuild } from "./rebuild.js";
 const HELP_TEXT = `kk — KodeKlarity code graph for AI agents
 
 Usage:
-  kk init [--force] [--json]              Build the code graph (full scan)
-  kk rebuild [--force] [--json] [--quiet] Incremental rebuild from git diff
-  kk impact <symbol> [--depth N] [--json]  What breaks if I change this?
-  kk upstream <symbol> [--depth N] [--json] What depends on this?
+  kk init [--force] [--json]                Build the code graph (full scan)
+  kk rebuild [--force] [--json] [--quiet]   Incremental rebuild from git diff
+  kk impact <symbol> [--depth N] [--json]   What breaks if I change this?
+  kk upstream <symbol> [--depth N] [--json]  What depends on this?
   kk downstream <symbol> [--depth N] [--json] What does this call?
   kk side-effects <symbol> [--depth N] [--json] What side effects does this trigger?
   kk why --from <symbol> --to <symbol> [--json] How are these connected?
-  kk risk [--json]                         Risk score for current git changes
-  kk status [--json]                       Show graph overview
-
-Legacy commands:
-  kk artifact create --request <path|-> [--mode <auto|full|seed>] [--out-dir <path>] [--json]
-  kk artifact template [--feature <name>] [--mode <full|seed>]
-
-  kk graph init [--db-path <path>] [--json]
-  kk-codeslice graph verify --request <path> [--json]
-  kk-codeslice graph build --request <path> [--keep-builds <n>] [--min-confidence <1-100>] [--enforce-confidence] [--db-path <path>] [--json]
-  kk-codeslice graph rebuild --request <path> [--changed-files <csv>] [--base-ref <ref>] [--head-ref <ref>] [--keep-builds <n>] [--db-path <path>] [--json]
-  kk-codeslice graph export --feature <name> [--build-id <id>] [--out <path>] [--db-path <path>] [--json]
-  kk-codeslice graph profile --request <path> [--changed-files <csv>] [--base-ref <ref>] [--head-ref <ref>] [--depth <n>] [--keep-builds <n>] [--db-path <path>] [--json]
-
-  kk-codeslice graph query impact --feature <name> --symbol <symbol> [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query downstream --feature <name> --symbol <symbol> [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query upstream --feature <name> --symbol <symbol> [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query risk --request <path> [--changed-files <csv>] [--base-ref <ref>] [--head-ref <ref>] [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query side-effects --feature <name> --symbol <symbol> [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query why --feature <name> --from <node|symbol> --to <node|symbol> [--depth <n>] [--db-path <path>] [--json]
-  kk-codeslice graph query diff --feature <name> --build-a <id> --build-b <id> [--db-path <path>] [--json]
-
-  kk-codeslice help
+  kk risk [--json]                           Risk score for current git changes
+  kk status [--json]                         Show graph overview
+  kk help                                    Show this help
 
 Examples:
-  kk-codeslice artifact create --mode seed --request ./examples/authentication.seed.payload.json --json
-  kk-codeslice graph init
-  kk-codeslice graph verify --request ./examples/authentication.payload.json --json
-  kk-codeslice graph build --request ./examples/authentication.payload.json --keep-builds 20
-  kk-codeslice graph rebuild --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts
-  kk-codeslice graph query impact --feature authentication --symbol onSubmit --depth 4 --json
-  kk-codeslice graph query downstream --feature authentication --symbol onSubmit --depth 4 --json
-  kk-codeslice graph query upstream --feature authentication --symbol authenticate --depth 4 --json
-  kk-codeslice graph query risk --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts --depth 6 --json
-  kk-codeslice graph query side-effects --feature authentication --symbol onSubmit --depth 6 --json
-  kk-codeslice graph query why --feature authentication --from onSubmit --to service.auth.authenticate --depth 5 --json
-  kk-codeslice graph query diff --feature authentication --build-a <old-build-id> --build-b <new-build-id> --json
-  kk-codeslice graph export --feature authentication --out ./artifacts/auth.snapshot.json --json
-  kk-codeslice graph profile --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts --json
+  kk init
+  kk impact updateUser --depth 3
+  kk upstream requireAuth --depth 2
+  kk side-effects createContract --depth 4
+  kk why --from createContract --to users
+  kk risk
+  kk status --json
 `;
 
 const VALUE_FLAGS = new Set([
@@ -280,7 +253,7 @@ function emitUnknownFlagError(parsed, asJson, hint) {
         actual: flag,
         fix: hint,
       })),
-      retryHint: "Run: kk-codeslice help",
+      retryHint: "Run: kk help",
     }),
     asJson
   );
@@ -324,7 +297,7 @@ async function handleArtifactCreate(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice artifact create --request ./examples/authentication.payload.json"
+    "Example: kk artifact create --request ./examples/authentication.payload.json"
   );
 
   if (!requestArg) {
@@ -344,7 +317,7 @@ async function handleArtifactCreate(args) {
             fix: "Set --mode to auto, full, or seed.",
           },
         ],
-        retryHint: "Example: kk-codeslice artifact create --mode seed --request ./payload.json",
+        retryHint: "Example: kk artifact create --mode seed --request ./payload.json",
       }),
       asJson
     );
@@ -366,7 +339,7 @@ async function handleArtifactCreate(args) {
             fix: "Fix JSON syntax and retry.",
           },
         ],
-        retryHint: "Validate JSON, then rerun kk-codeslice artifact create.",
+        retryHint: "Validate JSON, then rerun kk artifact create.",
       }),
       asJson
     );
@@ -431,7 +404,7 @@ async function handleArtifactTemplate(args) {
             fix: "Set --mode to full or seed for template output.",
           },
         ],
-        retryHint: "Example: kk-codeslice artifact template --mode seed --feature authentication",
+        retryHint: "Example: kk artifact template --mode seed --feature authentication",
       }),
       asJson
     );
@@ -504,7 +477,7 @@ async function handleGraphVerify(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice graph verify --request ./examples/authentication.payload.json --json"
+    "Example: kk graph verify --request ./examples/authentication.payload.json --json"
   );
 
   if (!requestPath) {
@@ -572,7 +545,7 @@ async function handleGraphBuild(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice graph build --request ./.kodeklarity/requests/authentication/<file>.json"
+    "Example: kk graph build --request ./.kodeklarity/requests/authentication/<file>.json"
   );
 
   if (!requestPath) {
@@ -687,7 +660,7 @@ async function handleGraphRebuild(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice graph rebuild --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
+    "Example: kk graph rebuild --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
   );
 
   if (!requestPath) {
@@ -782,7 +755,7 @@ async function handleGraphExport(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph export --feature authentication --out ./artifacts/auth.snapshot.json"
+    "Example: kk graph export --feature authentication --out ./artifacts/auth.snapshot.json"
   );
 
   if (!feature) {
@@ -857,7 +830,7 @@ async function handleGraphProfile(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice graph profile --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
+    "Example: kk graph profile --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
   );
 
   if (!requestPath) {
@@ -971,7 +944,7 @@ async function handleGraphQueryImpact(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query impact --feature authentication --symbol onSubmit"
+    "Example: kk graph query impact --feature authentication --symbol onSubmit"
   );
 
   if (!feature) {
@@ -982,7 +955,7 @@ async function handleGraphQueryImpact(args) {
     parsed,
     "symbol",
     asJson,
-    "Example: kk-codeslice graph query impact --feature authentication --symbol onSubmit"
+    "Example: kk graph query impact --feature authentication --symbol onSubmit"
   );
 
   if (!symbol) {
@@ -1069,7 +1042,7 @@ async function handleGraphQueryDownstream(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query downstream --feature authentication --symbol onSubmit"
+    "Example: kk graph query downstream --feature authentication --symbol onSubmit"
   );
 
   if (!feature) {
@@ -1080,7 +1053,7 @@ async function handleGraphQueryDownstream(args) {
     parsed,
     "symbol",
     asJson,
-    "Example: kk-codeslice graph query downstream --feature authentication --symbol onSubmit"
+    "Example: kk graph query downstream --feature authentication --symbol onSubmit"
   );
 
   if (!symbol) {
@@ -1163,7 +1136,7 @@ async function handleGraphQueryUpstream(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query upstream --feature authentication --symbol authenticate"
+    "Example: kk graph query upstream --feature authentication --symbol authenticate"
   );
 
   if (!feature) {
@@ -1174,7 +1147,7 @@ async function handleGraphQueryUpstream(args) {
     parsed,
     "symbol",
     asJson,
-    "Example: kk-codeslice graph query upstream --feature authentication --symbol authenticate"
+    "Example: kk graph query upstream --feature authentication --symbol authenticate"
   );
 
   if (!symbol) {
@@ -1261,7 +1234,7 @@ async function handleGraphQuerySideEffects(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query side-effects --feature authentication --symbol onSubmit"
+    "Example: kk graph query side-effects --feature authentication --symbol onSubmit"
   );
 
   if (!feature) {
@@ -1272,7 +1245,7 @@ async function handleGraphQuerySideEffects(args) {
     parsed,
     "symbol",
     asJson,
-    "Example: kk-codeslice graph query side-effects --feature authentication --symbol onSubmit"
+    "Example: kk graph query side-effects --feature authentication --symbol onSubmit"
   );
 
   if (!symbol) {
@@ -1360,7 +1333,7 @@ async function handleGraphQueryRisk(args) {
     parsed,
     "request",
     asJson,
-    "Example: kk-codeslice graph query risk --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
+    "Example: kk graph query risk --request ./examples/authentication.payload.json --changed-files src/features/auth/LoginForm.ts"
   );
 
   if (!requestPath) {
@@ -1449,7 +1422,7 @@ async function handleGraphQueryWhy(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
+    "Example: kk graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
   );
 
   if (!feature) {
@@ -1460,7 +1433,7 @@ async function handleGraphQueryWhy(args) {
     parsed,
     "from",
     asJson,
-    "Example: kk-codeslice graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
+    "Example: kk graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
   );
 
   if (!from) {
@@ -1471,7 +1444,7 @@ async function handleGraphQueryWhy(args) {
     parsed,
     "to",
     asJson,
-    "Example: kk-codeslice graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
+    "Example: kk graph query why --feature authentication --from onSubmit --to service.auth.authenticate"
   );
 
   if (!to) {
@@ -1568,7 +1541,7 @@ async function handleGraphQueryDiff(args) {
     parsed,
     "feature",
     asJson,
-    "Example: kk-codeslice graph query diff --feature authentication --build-a <id> --build-b <id>"
+    "Example: kk graph query diff --feature authentication --build-a <id> --build-b <id>"
   );
   if (!feature) {
     return 1;
@@ -1578,7 +1551,7 @@ async function handleGraphQueryDiff(args) {
     parsed,
     "build-a",
     asJson,
-    "Example: kk-codeslice graph query diff --feature authentication --build-a <id> --build-b <id>"
+    "Example: kk graph query diff --feature authentication --build-a <id> --build-b <id>"
   );
   if (!buildA) {
     return 1;
@@ -1588,7 +1561,7 @@ async function handleGraphQueryDiff(args) {
     parsed,
     "build-b",
     asJson,
-    "Example: kk-codeslice graph query diff --feature authentication --build-a <id> --build-b <id>"
+    "Example: kk graph query diff --feature authentication --build-a <id> --build-b <id>"
   );
   if (!buildB) {
     return 1;

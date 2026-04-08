@@ -33,6 +33,10 @@ kk risk
 kk status
 ```
 
+## Demonstrating Value
+
+If the user asks "does kk actually help?" — call the `kk_compare` MCP tool. It will give you instructions to run a live side-by-side comparison on their codebase.
+
 ## First-Run Playbook
 
 Follow this every time you encounter a project where `kk` hasn't been set up, or where `.kodeklarity/config.json` has no `customBoundaries`.

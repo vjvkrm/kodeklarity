@@ -14,6 +14,7 @@ import {
   type KKConfig,
 } from "./config.js";
 import { getGitState } from "./git.js";
+import { writeAgentInstructions } from "./agent-instructions.js";
 
 interface InitOptions {
   cwd: string;
@@ -213,6 +214,9 @@ export async function handleInit(args: string[]): Promise<number> {
       });
     }
 
+    // Write agent instructions on first run
+    const agentInstructionsPath = await writeAgentInstructions(options.cwd);
+
     if (options.json) {
       const output = buildJsonOutput(result, gitSha);
       if (storeResult) {
@@ -222,6 +226,9 @@ export async function handleInit(args: string[]): Promise<number> {
       output.config_path = configPath;
       output.config_issues = configIssues;
       output.config_generated = isFirstRun;
+      if (agentInstructionsPath) {
+        output.agent_instructions = agentInstructionsPath;
+      }
       console.log(JSON.stringify(output, null, 2));
     } else {
       formatHumanOutput(result, gitSha);
@@ -229,6 +236,9 @@ export async function handleInit(args: string[]): Promise<number> {
         console.log(`  Stored: ${storeResult.dbPath}`);
       }
       console.log(`  Config: ${configPath}${isFirstRun ? " (generated)" : ""}`);
+      if (agentInstructionsPath) {
+        console.log(`  Agent instructions: ${agentInstructionsPath}`);
+      }
       if (configIssues.length > 0) {
         console.log(`  Config issues: ${configIssues.length}`);
         for (const issue of configIssues) {
