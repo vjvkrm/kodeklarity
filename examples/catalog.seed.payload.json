@@ -1,0 +1,15 @@
+{
+  "feature_name": "catalog",
+  "repository_root": "./examples/sample-app",
+  "notes": "Seed payload for barrel re-export resolution.",
+  "origins": [
+    {
+      "id": "origin.server.catalog.entry",
+      "kind": "backend_entry",
+      "file": "src/server/catalog/catalog.entry.ts",
+      "symbol": "catalogEntry",
+      "line": 5,
+      "reason": "Catalog flow entrypoint through barrel-based service import"
+    }
+  ]
+}

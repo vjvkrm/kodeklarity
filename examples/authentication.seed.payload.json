@@ -1,0 +1,15 @@
+{
+  "feature_name": "authentication",
+  "repository_root": "./examples/sample-app",
+  "notes": "Seed payload: start from the primary origin and expand graph later.",
+  "origins": [
+    {
+      "id": "origin.ui.login.submit",
+      "kind": "frontend_event",
+      "file": "src/features/auth/LoginForm.ts",
+      "symbol": "onSubmit",
+      "line": 8,
+      "reason": "User submits login form, starting the authentication flow"
+    }
+  ]
+}

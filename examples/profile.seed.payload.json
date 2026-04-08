@@ -1,0 +1,15 @@
+{
+  "feature_name": "profile",
+  "repository_root": "./examples/sample-app",
+  "notes": "Seed payload for type-aware class method traversal.",
+  "origins": [
+    {
+      "id": "origin.server.profile.controller",
+      "kind": "backend_entry",
+      "file": "src/server/profile/profile.controller.ts",
+      "symbol": "profileController",
+      "line": 5,
+      "reason": "Controller entrypoint for profile retrieval flow"
+    }
+  ]
+}

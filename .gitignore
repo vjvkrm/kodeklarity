@@ -1,0 +1,6 @@
+node_modules/
+.kodeklarity/
+dist/
+.DS_Store
+README-TRACKING.md
+TASKS.md

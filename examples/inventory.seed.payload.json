@@ -1,0 +1,15 @@
+{
+  "feature_name": "inventory",
+  "repository_root": "./examples/sample-app",
+  "notes": "Seed payload for tsconfig alias-path import resolution.",
+  "origins": [
+    {
+      "id": "origin.server.inventory.entry",
+      "kind": "backend_entry",
+      "file": "src/server/inventory/inventory.entry.ts",
+      "symbol": "inventoryEntry",
+      "line": 5,
+      "reason": "Inventory flow entrypoint using @server alias imports"
+    }
+  ]
+}

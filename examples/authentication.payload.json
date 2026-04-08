@@ -1,0 +1,45 @@
+{
+  "feature_name": "authentication",
+  "repository_root": "./examples/sample-app",
+  "notes": "Initial boundary draft for login flow.",
+  "entrypoints": [
+    {
+      "id": "ui.login.submit",
+      "kind": "frontend_event",
+      "file": "src/features/auth/LoginForm.ts",
+      "symbol": "onSubmit",
+      "line": 8,
+      "reason": "User submits credentials from login form"
+    }
+  ],
+  "api_edges": [
+    {
+      "from": "ui.login.submit",
+      "to": "api.post./auth/login",
+      "file": "src/features/auth/api.ts",
+      "symbol": "login",
+      "line": 7,
+      "reason": "Frontend calls backend login endpoint"
+    }
+  ],
+  "service_edges": [
+    {
+      "from": "api.post./auth/login",
+      "to": "service.auth.authenticate",
+      "file": "src/server/auth/auth.controller.ts",
+      "symbol": "loginController",
+      "line": 7,
+      "reason": "Controller delegates request to auth service"
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "db_read",
+      "target": "users",
+      "file": "src/server/auth/auth.service.ts",
+      "symbol": "authenticate",
+      "line": 10,
+      "reason": "Service reads user record by email"
+    }
+  ]
+}

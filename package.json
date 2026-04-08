@@ -1,0 +1,27 @@
+{
+  "name": "kodeklarity",
+  "version": "0.1.0",
+  "description": "Whole-project code graph for AI agents — impact analysis, risk scoring, cross-boundary tracing",
+  "type": "module",
+  "bin": {
+    "kk": "dist/bin/kk.js"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "start": "node ./dist/bin/kk.js",
+    "dev": "npm run build && node ./dist/bin/kk.js",
+    "smoke": "npm run build && node ./dist/bin/kk.js help",
+    "test:integration": "node --test ./tests/integration.cli.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.17"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

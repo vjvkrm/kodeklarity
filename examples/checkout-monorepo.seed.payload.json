@@ -1,0 +1,15 @@
+{
+  "feature_name": "checkout_monorepo",
+  "repository_root": "./examples/monorepo-app",
+  "notes": "Seed payload for tsconfig extends + project reference alias chaining.",
+  "origins": [
+    {
+      "id": "origin.app.checkout.entry",
+      "kind": "backend_entry",
+      "file": "packages/app/src/checkout/checkout.entry.ts",
+      "symbol": "checkoutEntry",
+      "line": 5,
+      "reason": "Checkout entrypoint in app package importing shared alias via base tsconfig"
+    }
+  ]
+}
