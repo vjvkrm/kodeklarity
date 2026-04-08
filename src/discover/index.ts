@@ -12,11 +12,24 @@ import type {
 
 export type { DiscoveryResult, BoundaryNode, BoundaryEdge, DiscoveryGap, Workspace };
 
+interface DiscoverConfig {
+  workspaces?: Record<string, { adapters?: string[]; exclude?: string[] }>;
+  exclude?: string[];
+  customBoundaries?: Array<{
+    name: string;
+    kind: string;
+    glob: string;
+    symbolPattern?: string;
+    reason: string;
+  }>;
+  stack?: { enabled?: string[]; disabled?: string[] };
+}
+
 /**
  * Run full project discovery — detect workspaces, detect stack per workspace,
  * run framework adapters, collect all boundary nodes/edges/gaps.
  */
-export async function discover(repoRoot: string): Promise<DiscoveryResult> {
+export async function discover(repoRoot: string, config?: DiscoverConfig): Promise<DiscoveryResult> {
   const absRoot = path.resolve(repoRoot);
 
   // Step 1: Detect workspace structure
@@ -48,8 +61,20 @@ export async function discover(repoRoot: string): Promise<DiscoveryResult> {
   const filesWithBoundaries = new Set<string>();
 
   for (const ws of workspaces) {
-    // Collect unique adapter names from detected stack
-    const adapterNames = new Set(ws.stack.map((s) => s.adapter));
+    // Use config workspace overrides if available, otherwise use detected stack
+    const wsConfig = config?.workspaces?.[ws.relativePath];
+    const disabledAdapters = new Set(config?.stack?.disabled ?? []);
+
+    let adapterNames: Set<string>;
+    if (wsConfig?.adapters) {
+      // Config explicitly sets adapters for this workspace
+      adapterNames = new Set(wsConfig.adapters.filter((a) => !disabledAdapters.has(a)));
+    } else {
+      // Use auto-detected stack
+      adapterNames = new Set(
+        ws.stack.map((s) => s.adapter).filter((a) => !disabledAdapters.has(a))
+      );
+    }
 
     for (const adapterName of adapterNames) {
       const adapter = getAdapter(adapterName);
@@ -73,6 +98,67 @@ export async function discover(repoRoot: string): Promise<DiscoveryResult> {
       const gaps = (result as unknown as Record<string, unknown>).gaps;
       if (Array.isArray(gaps)) {
         allGaps.push(...(gaps as DiscoveryGap[]));
+      }
+    }
+  }
+
+  // Step 4: Scan custom boundaries from config
+  if (config?.customBoundaries) {
+    for (const cb of config.customBoundaries) {
+      const { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId } = await import("./adapters/utils.js");
+      const matchedFiles = await findFiles(absRoot, [cb.glob]);
+      const symbolRegex = cb.symbolPattern ? new RegExp(cb.symbolPattern, "g") : null;
+
+      for (const file of matchedFiles) {
+        const content = await readFileSafe(file);
+        if (!content) continue;
+        const rel = toRelative(file, absRoot);
+
+        if (symbolRegex) {
+          // Extract symbols matching pattern
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            const match = lines[i].match(symbolRegex);
+            if (match) {
+              // Extract function/const name after the match
+              const nameMatch = lines[i].match(/(?:function|const|let|class)\s+(\w+)/);
+              if (nameMatch) {
+                const symbol = nameMatch[1];
+                const nodeId = makeNodeId(cb.kind, rel, symbol);
+                if (!allNodes.some((n) => n.id === nodeId)) {
+                  allNodes.push({
+                    id: nodeId,
+                    kind: cb.kind,
+                    symbol,
+                    file: rel,
+                    line: i + 1,
+                    reason: `${cb.reason}: ${symbol}`,
+                    adapter: "custom",
+                    metadata: { customBoundary: cb.name },
+                  });
+                  filesWithBoundaries.add(rel);
+                }
+              }
+            }
+          }
+        } else {
+          // No symbol pattern — register the file itself as a boundary
+          const basename = path.basename(file, path.extname(file));
+          const nodeId = makeNodeId(cb.kind, rel, basename);
+          if (!allNodes.some((n) => n.id === nodeId)) {
+            allNodes.push({
+              id: nodeId,
+              kind: cb.kind,
+              symbol: basename,
+              file: rel,
+              line: 1,
+              reason: cb.reason,
+              adapter: "custom",
+              metadata: { customBoundary: cb.name },
+            });
+            filesWithBoundaries.add(rel);
+          }
+        }
       }
     }
   }

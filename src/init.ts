@@ -5,6 +5,14 @@ import type { DiscoveryResult } from "./discover/index.js";
 import { storeDiscoveryResult } from "./store.js";
 import type { StoreResult } from "./store.js";
 import { traceImportEdges } from "./trace.js";
+import {
+  loadConfig,
+  saveConfig,
+  generateDefaultConfig,
+  mergeConfig,
+  validateConfig,
+  type KKConfig,
+} from "./config.js";
 
 interface InitOptions {
   cwd: string;
@@ -130,7 +138,11 @@ export async function handleInit(args: string[]): Promise<number> {
   };
 
   try {
-    const result = await discover(options.cwd);
+    // Load or generate config
+    let config = await loadConfig(options.cwd);
+    const isFirstRun = !config;
+
+    const result = await discover(options.cwd, config ?? undefined);
     const gitSha = getGitHeadSha(options.cwd);
 
     if (result.nodes.length === 0 && result.workspaces.length === 0) {
@@ -148,12 +160,26 @@ export async function handleInit(args: string[]): Promise<number> {
       return 1;
     }
 
+    // Generate or merge config
+    const freshConfig = generateDefaultConfig(result);
+    if (isFirstRun || options.force) {
+      config = freshConfig;
+    } else {
+      config = mergeConfig(config!, freshConfig);
+    }
+
+    // Validate config
+    const configIssues = validateConfig(config);
+
+    // Save config
+    const configPath = await saveConfig(options.cwd, config);
+
     // Trace import edges between discovered boundary nodes
     if (result.nodes.length > 0) {
       const traceResult = await traceImportEdges({
         repoRoot: options.cwd,
         nodes: result.nodes,
-        maxDepth: 4,
+        maxDepth: config.trace.maxDepth,
       });
       // Merge traced edges into discovery result
       result.edges.push(...traceResult.edges);
@@ -175,13 +201,23 @@ export async function handleInit(args: string[]): Promise<number> {
         output.db_path = storeResult.dbPath;
         output.build_id = storeResult.buildId;
       }
+      output.config_path = configPath;
+      output.config_issues = configIssues;
+      output.config_generated = isFirstRun;
       console.log(JSON.stringify(output, null, 2));
     } else {
       formatHumanOutput(result, gitSha);
       if (storeResult) {
         console.log(`  Stored: ${storeResult.dbPath}`);
-        console.log("");
       }
+      console.log(`  Config: ${configPath}${isFirstRun ? " (generated)" : ""}`);
+      if (configIssues.length > 0) {
+        console.log(`  Config issues: ${configIssues.length}`);
+        for (const issue of configIssues) {
+          console.log(`    ${issue.field}: ${issue.issue}`);
+        }
+      }
+      console.log("");
     }
 
     return 0;
