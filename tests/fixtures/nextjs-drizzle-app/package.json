@@ -1,0 +1,11 @@
+{
+  "name": "test-app",
+  "version": "0.1.0",
+  "workspaces": ["packages/*"],
+  "dependencies": {
+    "next": "15.0.0",
+    "react": "19.0.0",
+    "drizzle-orm": "0.45.0",
+    "@trigger.dev/sdk": "4.0.0"
+  }
+}

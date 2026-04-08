@@ -202,17 +202,97 @@ Add to `.claude/settings.json`:
 
 ## Framework Support
 
+**TypeScript ecosystem only (v1).** Each adapter understands framework-specific patterns that generic tools miss.
+
+### Fully Supported & Tested
+
 | Framework | What it discovers |
 |-----------|------------------|
 | **Next.js** | Pages, API routes, server actions, middleware, layouts, `revalidatePath` / `revalidateTag` edges |
-| **Drizzle** | Tables (`pgTable`/`sqliteTable`), RLS policies, `db.select/insert/update/delete` edges, relations |
-| **NestJS** | Controllers, services, modules, guards, interceptors, route handlers with DI awareness |
-| **Express** | Routes (`router.get/post`...), middleware chains |
-| **React** | Custom hooks (`use*`), context providers |
-| **Trigger.dev** | Tasks, jobs |
-| **Generic** | External API calls (`fetch`), event emitters, dynamic dispatch (flagged as gaps) |
+| **Drizzle ORM** | Tables (`pgTable`/`sqliteTable`), RLS policies, `db.select/insert/update/delete` edges, relations |
+| **Trigger.dev** | Tasks (`task()`), jobs (`defineJob()`) |
 
-**Monorepo support:** Turborepo, Nx, pnpm workspaces, npm workspaces. Cross-workspace import resolution via `package.json` exports fields.
+### Available (Coming Soon: Full Test Coverage)
+
+| Framework | What it discovers | Status |
+|-----------|------------------|--------|
+| **NestJS** | Controllers, services, modules, guards, interceptors, route handlers with DI awareness | Adapter built, needs test fixtures |
+| **Express** | Routes (`router.get/post`...), middleware chains (`app.use`) | Adapter built, needs test fixtures |
+| **React** (standalone) | Custom hooks (`use*`), context providers (`createContext`) | Adapter built, needs test fixtures |
+| **Generic patterns** | External API calls (`fetch`), event emitters (`.emit/.publish`), dynamic dispatch (flagged as gaps) | Adapter built, needs test fixtures |
+
+### Planned / Community Contributions Welcome
+
+| Framework | What we'd detect | Help wanted |
+|-----------|-----------------|-------------|
+| **Prisma** | Models from `schema.prisma`, relations, `prisma.user.findMany()` edges | [Contribute](#contributing) |
+| **tRPC** | Routers, procedures, middleware chains | [Contribute](#contributing) |
+| **Hono** | Routes, middleware | [Contribute](#contributing) |
+| **Elysia** | Routes, guards, plugins | [Contribute](#contributing) |
+| **Supabase** | Client calls (`supabase.from('users').select()`) | [Contribute](#contributing) |
+| **Clerk / Auth.js** | Auth boundaries, session checks | [Contribute](#contributing) |
+| **GraphQL** | Resolvers, schema types, subscriptions | [Contribute](#contributing) |
+| **Fastify** | Routes, plugins, hooks | [Contribute](#contributing) |
+
+### Monorepo Support
+
+Turborepo, Nx, pnpm workspaces, npm workspaces — all supported. Cross-workspace import resolution via `package.json` exports fields.
+
+---
+
+## Contributing
+
+KodeKlarity is open to contributions — especially **new framework adapters**. Each adapter is a single TypeScript file (~100-200 lines) that teaches `kk` about a framework's patterns.
+
+### Adding a new framework adapter
+
+1. **Fork the repo** and create a branch
+
+2. **Create the adapter** at `src/discover/adapters/<framework>.ts`:
+   ```typescript
+   import type { FrameworkAdapter } from "../types.js";
+   import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDepVersion, shouldExclude } from "./utils.js";
+
+   export const myFrameworkAdapter: FrameworkAdapter = {
+     name: "myframework",
+     
+     detect(packageJson) {
+       const version = getDepVersion(packageJson, "my-framework");
+       if (!version) return null;
+       return { name: "MyFramework", version, adapter: "myframework" };
+     },
+
+     async scan(workspace, repoRoot) {
+       const nodes = [];
+       const edges = [];
+       // Find framework-specific patterns using glob + regex
+       // Create BoundaryNode for each discovered boundary
+       // Create BoundaryEdge for framework-specific connections
+       return { adapter: "myframework", nodes, edges };
+     },
+   };
+   ```
+
+3. **Register it** in `src/discover/detector.ts` — add to the `ADAPTERS` array
+
+4. **Create a test fixture** at `tests/fixtures/<framework>-app/` with a small sample project
+
+5. **Add tests** in `tests/discover.test.js`
+
+6. **Submit a PR** with:
+   - The adapter file
+   - Test fixture
+   - Tests
+   - Updated README (move framework from "Planned" to "Available")
+
+### Contribution Guidelines
+
+- One adapter per PR
+- Include at least 3 test cases (detection, node discovery, edge discovery)
+- Use `shouldExclude()` from utils to filter `node_modules`, `dist`, etc.
+- Use `makeNodeId()` for consistent node ID format
+- Framework detection should check `package.json` dependencies
+- Keep adapters simple — pattern matching via glob + regex, not full parsing
 
 ## Self-Improving Config
 

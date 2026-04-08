@@ -12,7 +12,11 @@
     "start": "node ./dist/bin/kk.js",
     "dev": "npm run build && node ./dist/bin/kk.js",
     "smoke": "npm run build && node ./dist/bin/kk.js help",
-    "test:integration": "node --test ./tests/integration.cli.test.js"
+    "test": "npm run build && node --test ./tests/discover.test.js ./tests/config.test.js ./tests/e2e.test.js",
+    "test:discover": "npm run build && node --test ./tests/discover.test.js",
+    "test:config": "npm run build && node --test ./tests/config.test.js",
+    "test:e2e": "npm run build && node --test ./tests/e2e.test.js",
+    "test:legacy": "node --test ./tests/integration.cli.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
