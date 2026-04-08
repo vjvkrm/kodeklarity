@@ -26,6 +26,7 @@ export async function storeDiscoveryResult(
   options: {
     dbPath?: string;
     gitSha?: string | null;
+    gitBranch?: string | null;
     keepBuilds?: number;
   } = {}
 ): Promise<StoreResult> {
@@ -185,12 +186,20 @@ export async function storeDiscoveryResult(
         });
       }
 
-      // Store git SHA if available
+      // Store git state
       if (options.gitSha) {
-        database.prepare(`
-          INSERT OR REPLACE INTO kv (key, value) VALUES ('last_build_sha', @sha)
-        `).run({ sha: options.gitSha });
+        database.prepare(
+          "INSERT OR REPLACE INTO kv (key, value) VALUES ('last_build_sha', @v)"
+        ).run({ v: options.gitSha });
       }
+      if (options.gitBranch) {
+        database.prepare(
+          "INSERT OR REPLACE INTO kv (key, value) VALUES ('last_build_branch', @v)"
+        ).run({ v: options.gitBranch });
+      }
+      database.prepare(
+        "INSERT OR REPLACE INTO kv (key, value) VALUES ('last_build_at', @v)"
+      ).run({ v: now });
 
       // Prune old builds
       db.pruneFeatureBuilds(database, GLOBAL_FEATURE, options.keepBuilds ?? 5);
@@ -220,17 +229,32 @@ function ensureGitShaColumn(database: any): void {
   `);
 }
 
-export async function getLastBuildSha(dbPath: string): Promise<string | null> {
+export interface BuildInfo {
+  sha: string | null;
+  branch: string | null;
+  builtAt: string | null;
+}
+
+export async function getLastBuildInfo(dbPath: string): Promise<BuildInfo> {
   const db = await getDb();
   try {
     const database = db.openDatabase(dbPath);
     try {
-      const row = database.prepare("SELECT value FROM kv WHERE key = 'last_build_sha'").get() as { value: string } | undefined;
-      return row?.value ?? null;
+      const getKv = (key: string) => {
+        try {
+          const row = database.prepare("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined;
+          return row?.value ?? null;
+        } catch { return null; }
+      };
+      return {
+        sha: getKv("last_build_sha"),
+        branch: getKv("last_build_branch"),
+        builtAt: getKv("last_build_at"),
+      };
     } finally {
       database.close();
     }
   } catch {
-    return null;
+    return { sha: null, branch: null, builtAt: null };
   }
 }

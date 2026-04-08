@@ -19,12 +19,23 @@ import {
 } from "./graph.js";
 import { INTAKE_MODES, normalizeAndValidatePayload } from "./validate-request.js";
 import { handleInit } from "./init.js";
+import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleRisk, handleStatus } from "./commands.js";
+import { handleRebuild } from "./rebuild.js";
 
 const HELP_TEXT = `kk — KodeKlarity code graph for AI agents
 
 Usage:
-  kk init [--force] [--json]
+  kk init [--force] [--json]              Build the code graph (full scan)
+  kk rebuild [--force] [--json] [--quiet] Incremental rebuild from git diff
+  kk impact <symbol> [--depth N] [--json]  What breaks if I change this?
+  kk upstream <symbol> [--depth N] [--json] What depends on this?
+  kk downstream <symbol> [--depth N] [--json] What does this call?
+  kk side-effects <symbol> [--depth N] [--json] What side effects does this trigger?
+  kk why --from <symbol> --to <symbol> [--json] How are these connected?
+  kk risk [--json]                         Risk score for current git changes
+  kk status [--json]                       Show graph overview
 
+Legacy commands:
   kk artifact create --request <path|-> [--mode <auto|full|seed>] [--out-dir <path>] [--json]
   kk artifact template [--feature <name>] [--mode <full|seed>]
 
@@ -1711,6 +1722,19 @@ export async function runCli(argv) {
   if (command === "init") {
     return handleInit([subcommand, ...rest].filter(Boolean));
   }
+
+  if (command === "rebuild") {
+    return handleRebuild([subcommand, ...rest].filter(Boolean));
+  }
+
+  // Simplified top-level commands
+  if (command === "impact") return handleImpact([subcommand, ...rest].filter(Boolean));
+  if (command === "upstream") return handleUpstream([subcommand, ...rest].filter(Boolean));
+  if (command === "downstream") return handleDownstream([subcommand, ...rest].filter(Boolean));
+  if (command === "side-effects") return handleSideEffects([subcommand, ...rest].filter(Boolean));
+  if (command === "why") return handleWhy([subcommand, ...rest].filter(Boolean));
+  if (command === "risk") return handleRisk([subcommand, ...rest].filter(Boolean));
+  if (command === "status") return handleStatus([subcommand, ...rest].filter(Boolean));
 
   if (command === "artifact") {
     if (subcommand === "create") {

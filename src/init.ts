@@ -1,10 +1,10 @@
 import path from "node:path";
-import { execSync } from "node:child_process";
 import { discover } from "./discover/index.js";
 import type { DiscoveryResult } from "./discover/index.js";
 import { storeDiscoveryResult } from "./store.js";
 import type { StoreResult } from "./store.js";
 import { traceImportEdges } from "./trace.js";
+import { traceWithTypeChecker } from "./type-tracer.js";
 import {
   loadConfig,
   saveConfig,
@@ -13,6 +13,7 @@ import {
   validateConfig,
   type KKConfig,
 } from "./config.js";
+import { getGitState } from "./git.js";
 
 interface InitOptions {
   cwd: string;
@@ -20,13 +21,7 @@ interface InitOptions {
   json: boolean;
 }
 
-function getGitHeadSha(cwd: string): string | null {
-  try {
-    return execSync("git rev-parse HEAD", { cwd, encoding: "utf8" }).trim() || null;
-  } catch {
-    return null;
-  }
-}
+// Git state is now handled by git.ts module
 
 function formatHumanOutput(result: DiscoveryResult, gitSha: string | null): void {
   console.log("");
@@ -143,7 +138,8 @@ export async function handleInit(args: string[]): Promise<number> {
     const isFirstRun = !config;
 
     const result = await discover(options.cwd, config ?? undefined);
-    const gitSha = getGitHeadSha(options.cwd);
+    const gitState = getGitState(options.cwd);
+    const gitSha = gitState.sha;
 
     if (result.nodes.length === 0 && result.workspaces.length === 0) {
       const error = {
@@ -174,25 +170,47 @@ export async function handleInit(args: string[]): Promise<number> {
     // Save config
     const configPath = await saveConfig(options.cwd, config);
 
-    // Trace import edges between discovered boundary nodes
+    // Trace edges between discovered boundary nodes
     if (result.nodes.length > 0) {
-      const traceResult = await traceImportEdges({
+      // Pass 1: Type-aware tracing (symbol-level precision via ts.createProgram)
+      const typeTraceResult = await traceWithTypeChecker({
         repoRoot: options.cwd,
         nodes: result.nodes,
         maxDepth: config.trace.maxDepth,
       });
-      // Merge traced edges into discovery result
-      result.edges.push(...traceResult.edges);
+      result.edges.push(...typeTraceResult.edges);
+
+      // Pass 2: File-level import tracing (catches what type checker missed — workspace imports, barrel re-exports)
+      const importTraceResult = await traceImportEdges({
+        repoRoot: options.cwd,
+        nodes: result.nodes,
+        maxDepth: config.trace.maxDepth,
+      });
+      // Only add edges not already found by type tracer
+      const existingEdges = new Set(result.edges.map((e) => `${e.from}→${e.to}`));
+      for (const edge of importTraceResult.edges) {
+        const key = `${edge.from}→${edge.to}`;
+        if (!existingEdges.has(key)) {
+          result.edges.push(edge);
+          existingEdges.add(key);
+        }
+      }
+
       // Update stats
-      for (const edge of traceResult.edges) {
-        result.stats.edgesByType[edge.edgeType] = (result.stats.edgesByType[edge.edgeType] || 0) + 1;
+      for (const edge of result.edges) {
+        if (edge.adapter === "type_trace" || edge.adapter === "ast_trace") {
+          result.stats.edgesByType[edge.edgeType] = (result.stats.edgesByType[edge.edgeType] || 0) + 1;
+        }
       }
     }
 
     // Store graph in SQLite
     let storeResult: StoreResult | null = null;
     if (result.nodes.length > 0) {
-      storeResult = await storeDiscoveryResult(result, { gitSha });
+      storeResult = await storeDiscoveryResult(result, {
+        gitSha,
+        gitBranch: gitState.branch,
+      });
     }
 
     if (options.json) {
