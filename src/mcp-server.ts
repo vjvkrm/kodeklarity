@@ -8,6 +8,7 @@ import { traceImportEdges } from "./trace.js";
 import { traceWithTypeChecker } from "./type-tracer.js";
 import { loadConfig, saveConfig, generateDefaultConfig, mergeConfig, validateConfig } from "./config.js";
 import { getGitState, getWorkingChanges } from "./git.js";
+import { compactifyTraversal, compactifyRisk, compactifyStatus, summarizeTraversal } from "./compact.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
 const GLOBAL_FEATURE = "__global__";
@@ -177,7 +178,9 @@ Run this first time you open a project, or after significant code changes. Use f
         symbol,
         depth,
       });
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const summary = summarizeTraversal(result);
+      const compact = compactifyTraversal(result);
+      return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
 
@@ -197,7 +200,9 @@ Run this first time you open a project, or after significant code changes. Use f
         symbol,
         depth,
       });
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const summary = summarizeTraversal(result);
+      const compact = compactifyTraversal(result);
+      return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
 
@@ -217,7 +222,9 @@ Run this first time you open a project, or after significant code changes. Use f
         symbol,
         depth,
       });
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const summary = summarizeTraversal(result);
+      const compact = compactifyTraversal(result);
+      return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
 
@@ -237,7 +244,9 @@ Run this first time you open a project, or after significant code changes. Use f
         symbol,
         depth,
       });
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      const summary = summarizeTraversal(result);
+      const compact = compactifyTraversal(result);
+      return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
 
