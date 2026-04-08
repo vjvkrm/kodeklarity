@@ -1,123 +1,316 @@
-# KodeKlarity
+<div align="center">
 
-CLI tool (`kk`) and MCP server (`kk-mcp`) that builds a code graph for TypeScript projects. Zero-LLM discovery: detects frameworks, traces imports, and builds a full relationship graph in seconds. Designed for AI agents (Claude Code, Codex, Cursor) to understand code relationships, trace impact, and score risk before making changes.
+# 🔍 KodeKlarity
+
+### Your codebase has thousands of hidden connections.<br>Now you can see all of them.
+
+ "Make Claude & Codex actually understand your codebase"
+
+*The code graph that gives AI agents — and developers — the full picture<br>before a single line of code is changed.*
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white)](#)
+[![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6)](#)
+[![Zero LLM](https://img.shields.io/badge/Zero_LLM-pure_static_analysis-22C55E)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#)
+
+</div>
+
+---
+
+<br>
+
+> 🎯 **Install it. Tell Claude or Codex to use it. That's it.**
+>
+> You don't learn a new tool. You don't change your workflow. You just give your AI assistant the ability to see how your entire codebase connects — every page, every API, every database table, every background job. It checks impact before making changes, catches ripple effects you'd miss, and scores risk on every diff.
+>
+> **Your AI assistant gets smarter. Your code gets safer. You ship faster.**
+
+<br>
+
+## ✨ Built for how teams actually work
+
+🎮 **Vibe coding without the fear** — Move fast, let KodeKlarity watch your back. It catches the ripple effects you'd miss.
+
+🤖 **Make Claude & Codex actually understand your codebase** — They stop guessing and start seeing the full map before touching any code. Fewer rollbacks, fewer "what happened?" moments.
+
+👀 **Code reviews in minutes, not hours** — Reviewer sees exactly what a PR affects: which pages, tables, jobs, and APIs. No more guessing.
+
+🚀 **New team member? No problem** — "Show me everything connected to payments" is a single command. Onboarding goes from weeks to days.
+
+🔧 **Refactor with confidence** — Know the blast radius before you start. Not after CI fails.
+
+😴 **Ship to production, sleep at night** — Risk score tells you if your diff is safe. Before you push.
+
+<br>
+
+---
+
+<br>
+
+## 🔄 Before & After
+
+| | Before KodeKlarity 😰 | After KodeKlarity 😎 |
+|---|---|---|
+| 💥 | *"I changed the user service and the billing page broke. How?"* | *"Changing user service affects 3 pages, 2 background jobs, and the billing API. Here's the chain."* |
+| 🤔 | *"Is it safe to refactor this?"* | *"This function has 686 dependents. Here are the 12 most critical ones."* |
+| 📊 | *"How risky is this pull request?"* | *"Risk score: 73/100. Touches 4 database tables and triggers 2 external API calls."* |
+| 🤖 | *"My AI assistant made a change that broke something downstream"* | *Claude/Codex checks impact **before** making changes. Every time. Automatically.* |
+
+<br>
+
+---
+
+<br>
+
+## 🔌 Install once, every AI session gets better
+
+<div align="center">
+
+**Claude Code** · **Codex** · **Cursor** · **Windsurf** · *any MCP-compatible agent*
+
+</div>
+
+```bash
+npm install -g kodeklarity
+```
+
+That's the setup. KodeKlarity runs as a background tool your AI assistant calls automatically. No extra prompting. No copy-pasting context. No new commands to memorize. Just tell Claude *"use kk to check impact before making changes"* and it handles the rest.
+
+<br>
+
+---
+
+<br>
+
+## ⚡ See it in action
+
+```
+$ kk impact updateUser
+
+  updateUser
+    ├── affects     → Settings page
+    ├── depends on  → Authentication
+    ├── connects to → User sync service
+    ├── touches     → Users table
+    ├── touches     → Sessions table
+    └── 847 total connections found
+```
+
+```
+$ kk risk
+
+  Changed files: 4
+  Affected nodes:      12
+  Downstream impacts:  89
+  Side effects:        3
+  Risk score:          73/100 (high)
+```
+
+<br>
+
+## 🧩 How it works
+
+| Step | What happens |
+|------|-------------|
+| **1. `kk init`** | Scans your project in seconds. Understands Next.js, Drizzle, NestJS, Express, Trigger.dev out of the box. Zero config needed. |
+| **2. Builds a map** | Every route, API, service, database table, and background job — plus how they connect to each other. |
+| **3. Ask anything** | What breaks if I change this? What depends on that? How risky are my changes? Answers in milliseconds. |
+| **4. Gets smarter** | Your AI assistant tunes the map over time by editing a simple config file. Every session, more accurate. Automatically. |
+
+<div align="center">
+
+**Tested on production monorepos: 750+ components · 43,000+ connections · 5 seconds · Zero AI cost**
+
+</div>
+
+## How It Works
+
+**Zero LLM. Pure static analysis. Framework-aware.**
+
+1. **Discovers boundaries automatically** — Reads your `package.json`, detects Next.js, Drizzle, NestJS, Express, Trigger.dev. Knows that `'use server'` is a mutation boundary, `pgTable()` is a data boundary, `task()` is an async boundary. No config needed.
+
+2. **Traces relationships with the TypeScript compiler** — Uses `ts.createProgram` (the actual TypeScript type checker) to resolve which function calls which, through generics, aliases, barrel re-exports, and monorepo workspace imports. Symbol-level precision, not grep.
+
+3. **Gets smarter every session** — AI agents edit `.kodeklarity/config.json` to teach it about project-specific patterns (your query layer, your service layer, your validation schemas). Next `kk rebuild` picks up the new patterns. Config persists across sessions — every agent benefits from previous improvements.
+
+**Result on a production monorepo:** 750+ nodes, 43k+ edges. Routes, server actions, tables, background jobs — all connected. 5 seconds, 0 tokens.
+
+---
 
 ## Quick Start
 
 ```bash
 npm install -g kodeklarity
 
-# Scan your project and build the graph
+# Build the graph
 kk init
 
-# What breaks if I change this?
-kk impact <symbol>
-
-# Risk score for my uncommitted changes
-kk risk
+# Query it
+kk impact <symbol>          # What breaks if I change this?
+kk upstream <symbol>        # What depends on this?
+kk risk                     # Risk score for my current changes
 ```
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---------|-------------|
-| `kk init` | Full scan: detect stack, discover boundaries, trace imports, store graph |
-| `kk rebuild` | Incremental rebuild from git diff. Skips if up-to-date. Tracks branch. |
-| `kk impact <symbol>` | Downstream blast radius -- what breaks if this changes |
-| `kk upstream <symbol>` | What depends on this symbol |
-| `kk downstream <symbol>` | What this symbol calls |
-| `kk side-effects <symbol>` | DB writes, API calls, events triggered by this symbol |
-| `kk why --from X --to Y` | Explain the connection path between two symbols |
-| `kk risk` | Zero-arg: reads git diff, returns risk score 0-100 |
-| `kk status` | Graph overview: node/edge counts, stack, last build info |
+| `kk init` | Scan project, discover boundaries, trace imports, store graph |
+| `kk rebuild` | Incremental rebuild — skips if no changes, tracks branch |
+| `kk impact <symbol>` | Downstream blast radius |
+| `kk upstream <symbol>` | What calls / depends on this |
+| `kk downstream <symbol>` | What this calls |
+| `kk side-effects <symbol>` | DB writes, API calls, events triggered |
+| `kk why --from X --to Y` | Explain how two symbols connect |
+| `kk risk` | Risk score (0-100) for uncommitted changes |
+| `kk status` | Graph overview |
 
-All commands output JSON by default and include confidence scores on every result.
+Add `--json` to any command for machine-readable output. Add `--depth N` to control traversal depth.
 
-## MCP Server Setup (Claude Code)
+## MCP Server
 
-Add to your Claude Code MCP config (`.claude/settings.json` or project-level):
+10 tools for AI agents: `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`
+
+### Claude Code
+
+Add to `.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "kodeklarity": {
-      "command": "npx",
-      "args": ["kodeklarity", "mcp"]
+      "command": "kk-mcp"
     }
   }
 }
 ```
 
-### MCP Tools (10 tools)
+### Cursor / Windsurf / Other MCP Clients
 
-`kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`
+```json
+{
+  "mcpServers": {
+    "kodeklarity": {
+      "command": "node",
+      "args": ["/path/to/kodeklarity/dist/bin/kk-mcp.js"]
+    }
+  }
+}
+```
+
+---
 
 ## Framework Support
 
-| Framework | What it detects |
-|-----------|----------------|
-| **Next.js** | Pages, API routes, server actions, middleware, layouts, revalidatePath/revalidateTag connections |
-| **Drizzle** | Table definitions, RLS policies, db.select/insert/update/delete to table edges, relations |
-| **NestJS** | Controllers, services, modules, guards, interceptors, route handlers |
-| **Express** | Routes (router.get/post/...), middleware (app.use) |
-| **React** | Custom hooks (use*), context providers (createContext) |
-| **Trigger.dev** | Tasks (task()), jobs (defineJob()) |
-| **Generic** | External API calls (fetch), event emissions (.emit/.publish), dynamic dispatch (flagged as gaps) |
+| Framework | What it discovers |
+|-----------|------------------|
+| **Next.js** | Pages, API routes, server actions, middleware, layouts, `revalidatePath` / `revalidateTag` edges |
+| **Drizzle** | Tables (`pgTable`/`sqliteTable`), RLS policies, `db.select/insert/update/delete` edges, relations |
+| **NestJS** | Controllers, services, modules, guards, interceptors, route handlers with DI awareness |
+| **Express** | Routes (`router.get/post`...), middleware chains |
+| **React** | Custom hooks (`use*`), context providers |
+| **Trigger.dev** | Tasks, jobs |
+| **Generic** | External API calls (`fetch`), event emitters, dynamic dispatch (flagged as gaps) |
 
-Monorepo support: Turborepo, Nx, pnpm workspaces, npm workspaces. Cross-workspace import resolution via package.json exports fields.
+**Monorepo support:** Turborepo, Nx, pnpm workspaces, npm workspaces. Cross-workspace import resolution via `package.json` exports fields.
 
-## Config System
+## Self-Improving Config
 
-After `kk init`, a config file is created at `.kodeklarity/config.json`. This file is designed to be edited by agents and developers to improve graph quality.
+After `kk init`, a config file is created at `.kodeklarity/config.json`. AI agents (or developers) edit this to improve the graph:
 
-Key config options:
-
-- **customBoundaries** -- teach kk about project-specific patterns (query layers, service layers, repositories)
-- **workspaces** -- override which adapters run on which workspace
-- **exclude** -- skip test files, migrations, scripts
-- **importAliases** -- add aliases not in tsconfig
-- **trace.maxDepth** -- control how deep import tracing goes
-- **stack.disabled** -- turn off noisy adapters
-
-After editing config, run `kk rebuild` to update the graph.
-
-## Tested Results (Sastrify Monorepo)
-
-11 workspaces, 752 nodes, 43,767 edges discovered:
-96 routes, 132 API routes, 195 server actions, 62 tables, 28 background jobs, 44 services, 178 queries, 12 external APIs.
-
-## Project Structure
-
-```
-kodeklarity/
-├── bin/kk.js              -- CLI entry point
-├── bin/kk-mcp.ts          -- MCP server entry point
-├── src/
-│   ├── cli.js             -- Command routing
-│   ├── commands.ts        -- Top-level commands (impact, upstream, risk, etc.)
-│   ├── config.ts          -- Agent-editable config system
-│   ├── init.ts            -- kk init orchestration
-│   ├── rebuild.ts         -- Incremental rebuild from git diff
-│   ├── git.ts             -- Git state, diff, working changes
-│   ├── trace.ts           -- Import chain traversal between boundary nodes
-│   ├── store.ts           -- SQLite graph storage
-│   ├── mcp-server.ts      -- MCP server (10 tools)
-│   ├── discover/          -- Discovery engine
-│   │   ├── index.ts       -- Orchestrator
-│   │   ├── types.ts       -- TypeScript interfaces
-│   │   ├── workspace.ts   -- Monorepo workspace detection
-│   │   ├── detector.ts    -- Stack detection + adapter registry
-│   │   └── adapters/      -- Framework-specific scanners
-│   │       ├── nextjs.ts, drizzle.ts, nestjs.ts, express.ts
-│   │       ├── react.ts, triggerdev.ts, generic.ts, utils.ts
-│   ├── db.js, query.js    -- SQLite schema + query engine (recursive CTEs)
-│   ├── ast.js, resolve.js -- TypeScript AST parsing + import resolution
-│   └── confidence.js      -- Scoring logic
-├── AGENT.md               -- Agent guide
-├── TASKS.md               -- Task plan
-└── README.md              -- This file
+```json
+{
+  "customBoundaries": [
+    {
+      "name": "query-layer",
+      "kind": "query",
+      "glob": "src/lib/queries/*.ts",
+      "symbolPattern": "export (async )?function",
+      "reason": "Data access layer"
+    }
+  ],
+  "workspaces": {
+    "packages/db": { "adapters": ["drizzle", "generic"] }
+  }
+}
 ```
 
-## TypeScript Only (v1)
+One config edit found 222 new nodes and 15,814 new edges. Config persists across sessions — every agent benefits from the previous agent's improvements.
 
-KodeKlarity v1 supports TypeScript projects only. Other languages require their own compiler integration and will come in future versions.
+## Git Integration
+
+- Stores git SHA + branch on each build
+- `kk rebuild` diffs against last build — skips if nothing changed
+- Branch switch triggers full rebuild
+- `kk risk` reads unstaged + staged + untracked changes
+
+## Real-World Results
+
+**Tested on a production Next.js + Drizzle monorepo:**
+
+| Metric | Result |
+|--------|--------|
+| Nodes discovered | 750+ (routes, API routes, server actions, tables, jobs, services, queries) |
+| Edges traced | 43,000+ |
+| Type-checker resolved edges | 268 (symbol-level precision) |
+| Import-usage resolved edges | 368 (symbol-to-symbol via import analysis) |
+| Discovery time | ~5 seconds |
+| LLM tokens used | 0 |
+| Upstream query (auth function) | 686 connections (349 routes, 331 actions) |
+| Impact query (server action) | 3,800+ downstream connections across 3 depth levels |
+
+---
+
+## Technical Details
+
+### Graph Storage
+
+SQLite database at `.kodeklarity/index/graph.sqlite`. Queries use recursive CTEs for traversal. Nodes and edges have confidence scores (`high`/`medium`/`low`).
+
+### Type-Aware Tracing
+
+Uses `ts.createProgram` for whole-project type resolution alongside file-level import tracing. Two precision tiers:
+
+1. **Symbol-level** (type_trace) — `updateUser` calls `requireAuth` (resolved through the TypeScript type checker)
+2. **File-level** (ast_trace) — covers cross-workspace imports and patterns the type checker can't resolve
+
+### Node Kinds
+
+`route`, `api_route`, `server_action`, `layout`, `middleware`, `controller`, `service`, `module`, `guard`, `interceptor`, `table`, `rls_policy`, `background_job`, `external_api`, `event`, `hook`, `context`, `query`
+
+### Edge Types
+
+`uses_table`, `reads_table`, `writes_table`, `calls`, `invokes_action`, `invokes_service`, `queries_data`, `triggers_job`, `revalidates`, `imports`, `external_call`, `calls_external`, `emits_event`, `uses_hook`, `uses_context`, `relates_to`
+
+### Project Structure
+
+```
+bin/kk.js                    CLI entry point
+bin/kk-mcp.ts                MCP server entry point
+src/
+  cli.js                     Command routing
+  commands.ts                Simplified commands (impact, upstream, risk...)
+  config.ts                  Agent-editable config system
+  init.ts                    kk init orchestration
+  rebuild.ts                 Incremental rebuild
+  git.ts                     Git state, diff, branch tracking
+  trace.ts                   File-level import chain traversal
+  type-tracer.ts             Type-aware tracing via ts.createProgram
+  store.ts                   SQLite graph storage
+  mcp-server.ts              MCP server (10 tools)
+  discover/                  Discovery engine
+    index.ts                 Orchestrator
+    workspace.ts             Monorepo workspace detection
+    detector.ts              Stack detection + adapter registry
+    adapters/                One file per framework
+  db.js, query.js            SQLite schema + recursive CTE queries
+  ast.js, resolve.js         AST parsing + import resolution
+  confidence.js              Scoring logic
+```
+
+## Language Support
+
+TypeScript only (v1). Each additional language requires its own compiler integration — Python, Go, Java planned for future versions.
+
+## License
+AGPL-3.0 — Free to use, modify, and distribute. If you offer it as a service, you must release your changes. 
