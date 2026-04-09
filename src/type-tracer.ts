@@ -13,19 +13,28 @@ interface TypeTraceResult {
   edges: BoundaryEdge[];
   filesAnalyzed: number;
   symbolsResolved: number;
-  fallbackFileEdges: number;
+  chainsTraced: number;
+}
+
+interface ResolvedCall {
+  symbolName: string;
+  line: number;
+  targetFile: string | null;
+  targetDeclaration: ts.Node | null;
+  boundaryNode: BoundaryNode | null; // non-null if this resolves to a boundary node
 }
 
 /**
  * Type-aware tracer using ts.createProgram for whole-project type resolution.
- * Creates symbol-level edges (functionA → functionB) instead of file-level edges.
+ * Follows call chains through intermediate (non-boundary) functions until
+ * hitting another boundary node or reaching max depth.
  */
 export async function traceWithTypeChecker(options: TypeTraceOptions): Promise<TypeTraceResult> {
-  const { repoRoot, nodes, maxDepth = 4 } = options;
+  const { repoRoot, nodes, maxDepth = 6 } = options;
   const edges: BoundaryEdge[] = [];
   const seenEdges = new Set<string>();
   let symbolsResolved = 0;
-  let fallbackFileEdges = 0;
+  let chainsTraced = 0;
 
   // Build maps for quick lookup
   const nodesByFile = new Map<string, BoundaryNode[]>();
@@ -42,12 +51,11 @@ export async function traceWithTypeChecker(options: TypeTraceOptions): Promise<T
     nodesBySymbol.set(node.symbol, bySymbol);
   }
 
-  // Create TypeScript program for the whole project
+  // Create TypeScript program
   const tsConfigPath = path.join(repoRoot, "tsconfig.json");
   const program = createProgram(tsConfigPath, repoRoot);
   if (!program) {
-    // Fallback: can't create program, return empty
-    return { edges: [], filesAnalyzed: 0, symbolsResolved: 0, fallbackFileEdges: 0 };
+    return { edges: [], filesAnalyzed: 0, symbolsResolved: 0, chainsTraced: 0 };
   }
 
   const checker = program.getTypeChecker();
@@ -61,58 +69,235 @@ export async function traceWithTypeChecker(options: TypeTraceOptions): Promise<T
 
     const sourceNodes = nodesByFile.get(absPath) || [];
 
-    // For each boundary node in this file, find what it calls
     for (const sourceNode of sourceNodes) {
-      // Find the function/variable declaration for this symbol
       const declaration = findDeclaration(sourceFile, sourceNode.symbol, sourceNode.line);
       if (!declaration) continue;
 
-      // Collect all call expressions within this declaration
-      const calls = collectCallsInNode(declaration, sourceFile, checker);
+      // Deep trace: follow call chains through intermediate functions
+      const reachedBoundaryNodes = traceCallChain(
+        declaration,
+        sourceFile,
+        sourceNode,
+        checker,
+        program,
+        nodesByFile,
+        nodesBySymbol,
+        repoRoot,
+        maxDepth
+      );
 
-      for (const call of calls) {
-        // Try to resolve the call target to a boundary node
-        const targetNode = resolveCallToBoundaryNode(
-          call, checker, nodesByFile, nodesBySymbol, repoRoot
-        );
+      for (const reached of reachedBoundaryNodes) {
+        if (reached.node.id === sourceNode.id) continue;
 
-        if (targetNode && targetNode.id !== sourceNode.id) {
-          const edgeKey = `${sourceNode.id}→${targetNode.id}`;
-          if (seenEdges.has(edgeKey)) continue;
-          seenEdges.add(edgeKey);
-          symbolsResolved++;
+        const edgeKey = `${sourceNode.id}→${reached.node.id}`;
+        if (seenEdges.has(edgeKey)) continue;
+        seenEdges.add(edgeKey);
+        symbolsResolved++;
 
-          edges.push({
-            from: sourceNode.id,
-            to: targetNode.id,
-            edgeType: inferSymbolEdgeType(sourceNode, targetNode),
-            file: sourceNode.file,
-            line: call.line,
-            reason: `${sourceNode.symbol} calls ${targetNode.symbol}`,
-            adapter: "type_trace",
-            metadata: {
-              callExpression: call.text,
-              resolvedVia: "type_checker",
-            },
-          });
-        }
+        edges.push({
+          from: sourceNode.id,
+          to: reached.node.id,
+          edgeType: inferSymbolEdgeType(sourceNode, reached.node),
+          file: sourceNode.file,
+          line: reached.originLine,
+          reason: reached.depth === 1
+            ? `${sourceNode.symbol} calls ${reached.node.symbol}`
+            : `${sourceNode.symbol} → ${reached.chain.join(" → ")} → ${reached.node.symbol}`,
+          adapter: "type_trace",
+          metadata: {
+            resolvedVia: "type_checker",
+            depth: reached.depth,
+            ...(reached.chain.length > 0 ? { chain: reached.chain } : {}),
+          },
+        });
       }
 
-      // Also trace imports to find boundary nodes this declaration depends on
-      // (for cases where the type checker can't resolve but import is clear)
+      if (reachedBoundaryNodes.length > 0) chainsTraced++;
+
+      // Also trace imports for this declaration
       const importEdges = traceImportsForDeclaration(
         sourceFile, sourceNode, declaration, nodesByFile, nodesBySymbol,
         repoRoot, checker, seenEdges, program.getCompilerOptions()
       );
-      for (const edge of importEdges) {
-        fallbackFileEdges++;
-        edges.push(edge);
+      edges.push(...importEdges);
+    }
+  }
+
+  return { edges, filesAnalyzed, symbolsResolved, chainsTraced };
+}
+
+interface ReachedBoundaryNode {
+  node: BoundaryNode;
+  depth: number;
+  originLine: number; // line in the source boundary node where the chain starts
+  chain: string[]; // intermediate function names
+}
+
+/**
+ * Follow call chains from a declaration, through intermediate functions,
+ * until hitting boundary nodes or max depth.
+ */
+function traceCallChain(
+  startDeclaration: ts.Node,
+  startSourceFile: ts.SourceFile,
+  sourceNode: BoundaryNode,
+  checker: ts.TypeChecker,
+  program: ts.Program,
+  nodesByFile: Map<string, BoundaryNode[]>,
+  nodesBySymbol: Map<string, BoundaryNode[]>,
+  repoRoot: string,
+  maxDepth: number
+): ReachedBoundaryNode[] {
+  const reached: ReachedBoundaryNode[] = [];
+  const visited = new Set<string>(); // prevent cycles: "file:symbol"
+
+  interface QueueItem {
+    declaration: ts.Node;
+    sourceFile: ts.SourceFile;
+    depth: number;
+    originLine: number; // line in the original boundary node
+    chain: string[]; // names of intermediate functions
+  }
+
+  const queue: QueueItem[] = [{
+    declaration: startDeclaration,
+    sourceFile: startSourceFile,
+    depth: 0,
+    originLine: 0,
+    chain: [],
+  }];
+
+  const startKey = `${startSourceFile.fileName}:${sourceNode.symbol}`;
+  visited.add(startKey);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.depth >= maxDepth) continue;
+
+    const calls = collectCallsInNode(current.declaration, current.sourceFile, checker);
+
+    for (const call of calls) {
+      const originLine = current.depth === 0 ? call.line : current.originLine;
+
+      // Try to resolve the call via the type checker
+      const resolved = resolveCall(call, checker, program, nodesByFile, nodesBySymbol, repoRoot);
+      if (!resolved) continue;
+
+      // Check if it resolves to a boundary node
+      if (resolved.boundaryNode) {
+        reached.push({
+          node: resolved.boundaryNode,
+          depth: current.depth + 1,
+          originLine,
+          chain: current.chain,
+        });
+        continue; // Don't follow into boundary nodes — they'll trace their own chains
+      }
+
+      // Not a boundary node — follow into the intermediate function
+      if (resolved.targetDeclaration && resolved.targetFile) {
+        const visitKey = `${resolved.targetFile}:${resolved.symbolName}`;
+        if (visited.has(visitKey)) continue;
+        visited.add(visitKey);
+
+        const targetSourceFile = program.getSourceFile(resolved.targetFile);
+        if (!targetSourceFile) continue;
+
+        queue.push({
+          declaration: resolved.targetDeclaration,
+          sourceFile: targetSourceFile,
+          depth: current.depth + 1,
+          originLine,
+          chain: [...current.chain, resolved.symbolName],
+        });
       }
     }
   }
 
-  return { edges, filesAnalyzed, symbolsResolved, fallbackFileEdges };
+  return reached;
 }
+
+/**
+ * Resolve a call expression to either a boundary node or an intermediate declaration.
+ */
+function resolveCall(
+  call: CallInfo,
+  checker: ts.TypeChecker,
+  program: ts.Program,
+  nodesByFile: Map<string, BoundaryNode[]>,
+  nodesBySymbol: Map<string, BoundaryNode[]>,
+  repoRoot: string
+): ResolvedCall | null {
+  try {
+    const callExpr = call.node as ts.CallExpression;
+    const symbol = checker.getSymbolAtLocation(callExpr.expression);
+    if (!symbol) return null;
+
+    const resolvedSymbol = symbol.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(symbol)
+      : symbol;
+
+    const declarations = resolvedSymbol.getDeclarations();
+    if (!declarations || declarations.length === 0) return null;
+
+    const decl = declarations[0];
+    const declFile = decl.getSourceFile().fileName;
+
+    // Skip node_modules / external
+    if (declFile.includes("node_modules")) return null;
+
+    // Check if this declaration is in a file with boundary nodes
+    const targetBoundaryNodes = nodesByFile.get(declFile);
+    let boundaryNode: BoundaryNode | null = null;
+
+    if (targetBoundaryNodes) {
+      // Try to match to a specific boundary node
+      boundaryNode = targetBoundaryNodes.find((n) => n.symbol === resolvedSymbol.name) || null;
+      if (!boundaryNode) {
+        // Try line-based match
+        const declLine = decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1;
+        boundaryNode = targetBoundaryNodes.find((n) => Math.abs(n.line - declLine) <= 3) || null;
+      }
+    }
+
+    // If not a boundary node, check if it's a unique symbol match
+    if (!boundaryNode) {
+      const byName = nodesBySymbol.get(resolvedSymbol.name);
+      if (byName && byName.length === 1) {
+        boundaryNode = byName[0];
+      }
+    }
+
+    return {
+      symbolName: resolvedSymbol.name,
+      line: call.line,
+      targetFile: declFile,
+      targetDeclaration: isFunctionLike(decl) ? decl : findFunctionParent(decl),
+      boundaryNode,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isFunctionLike(node: ts.Node): boolean {
+  return ts.isFunctionDeclaration(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isVariableDeclaration(node);
+}
+
+function findFunctionParent(node: ts.Node): ts.Node | null {
+  let current = node.parent;
+  while (current) {
+    if (isFunctionLike(current)) return current;
+    current = current.parent;
+  }
+  return node; // fallback to the node itself
+}
+
+// --- Shared utilities (same as before) ---
 
 interface CallInfo {
   text: string;
@@ -123,10 +308,8 @@ interface CallInfo {
 
 function createProgram(tsConfigPath: string, repoRoot: string): ts.Program | null {
   try {
-    // Try to read tsconfig
     const configFile = ts.readConfigFile(tsConfigPath, ts.sys.readFile);
     if (configFile.error) {
-      // No tsconfig — create a basic program from all TS files
       return createFallbackProgram(repoRoot);
     }
 
@@ -142,7 +325,6 @@ function createProgram(tsConfigPath: string, repoRoot: string): ts.Program | nul
         ...parsed.options,
         noEmit: true,
         skipLibCheck: true,
-        // Don't resolve all libs — we just need type info
         types: [],
       },
     });
@@ -153,18 +335,11 @@ function createProgram(tsConfigPath: string, repoRoot: string): ts.Program | nul
 
 function createFallbackProgram(repoRoot: string): ts.Program | null {
   try {
-    // Find TS files manually
-    const files: string[] = [];
-    function walk(dir: string) {
-      const entries = ts.sys.readDirectory(dir, [".ts", ".tsx"], ["node_modules", "dist", ".next"]);
-      files.push(...entries);
-    }
-    walk(repoRoot);
-
+    const files = ts.sys.readDirectory(repoRoot, [".ts", ".tsx"], ["node_modules", "dist", ".next"]);
     if (files.length === 0) return null;
 
     return ts.createProgram({
-      rootNames: files.slice(0, 500), // Cap to avoid OOM on huge repos
+      rootNames: files.slice(0, 500),
       options: {
         target: ts.ScriptTarget.ES2022,
         module: ts.ModuleKind.Node16,
@@ -252,53 +427,6 @@ function collectCallsInNode(
   return calls;
 }
 
-function resolveCallToBoundaryNode(
-  call: CallInfo,
-  checker: ts.TypeChecker,
-  nodesByFile: Map<string, BoundaryNode[]>,
-  nodesBySymbol: Map<string, BoundaryNode[]>,
-  repoRoot: string
-): BoundaryNode | null {
-  // Strategy 1: Use type checker to resolve the symbol
-  try {
-    const callExpr = call.node as ts.CallExpression;
-    const symbol = checker.getSymbolAtLocation(callExpr.expression);
-    if (symbol) {
-      const resolvedSymbol = symbol.flags & ts.SymbolFlags.Alias
-        ? checker.getAliasedSymbol(symbol)
-        : symbol;
-
-      const declarations = resolvedSymbol.getDeclarations();
-      if (declarations && declarations.length > 0) {
-        const decl = declarations[0];
-        const declFile = decl.getSourceFile().fileName;
-        const declNodes = nodesByFile.get(declFile);
-
-        if (declNodes) {
-          // Find the specific boundary node in that file
-          const match = declNodes.find((n) => n.symbol === resolvedSymbol.name);
-          if (match) return match;
-
-          // Try line-based match
-          const declLine = decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1;
-          const lineMatch = declNodes.find((n) => Math.abs(n.line - declLine) <= 3);
-          if (lineMatch) return lineMatch;
-        }
-      }
-    }
-  } catch {
-    // Type checker failed — fall through to heuristic
-  }
-
-  // Strategy 2: Heuristic — match by symbol name
-  const byName = nodesBySymbol.get(call.symbolName);
-  if (byName && byName.length === 1) {
-    return byName[0]; // Unique match
-  }
-
-  return null;
-}
-
 function traceImportsForDeclaration(
   sourceFile: ts.SourceFile,
   sourceNode: BoundaryNode,
@@ -312,7 +440,6 @@ function traceImportsForDeclaration(
 ): BoundaryEdge[] {
   const edges: BoundaryEdge[] = [];
 
-  // Find all identifiers used in the declaration that come from imports
   const usedIdentifiers = new Set<string>();
   function collectIdentifiers(node: ts.Node) {
     if (ts.isIdentifier(node)) {
@@ -322,13 +449,11 @@ function traceImportsForDeclaration(
   }
   collectIdentifiers(declaration);
 
-  // Check file-level imports
   ts.forEachChild(sourceFile, (node) => {
     if (!ts.isImportDeclaration(node)) return;
     if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier)) return;
     if (node.importClause?.isTypeOnly) return;
 
-    // Get imported names
     const importedNames: string[] = [];
     if (node.importClause?.name) {
       importedNames.push(node.importClause.name.text);
@@ -342,11 +467,9 @@ function traceImportsForDeclaration(
       }
     }
 
-    // Check which imported names are actually used in our declaration
     const usedImports = importedNames.filter((name) => usedIdentifiers.has(name));
     if (usedImports.length === 0) return;
 
-    // Resolve the module to find target boundary nodes
     try {
       const resolved = ts.resolveModuleName(
         node.moduleSpecifier.text,
@@ -361,7 +484,6 @@ function traceImportsForDeclaration(
       const targetNodes = nodesByFile.get(resolvedFile);
       if (!targetNodes) return;
 
-      // Match used imports to specific boundary nodes
       for (const importName of usedImports) {
         const targetNode = targetNodes.find((n) => n.symbol === importName);
         if (targetNode && targetNode.id !== sourceNode.id) {
@@ -411,6 +533,9 @@ function inferSymbolEdgeType(source: BoundaryNode, target: BoundaryNode): string
   if (tk === "hook") return "uses_hook";
   if (tk === "context") return "uses_context";
   if (sk === "server_action" && tk === "server_action") return "calls";
+  if (tk === "auth") return "uses_auth";
+  if (tk === "rls") return "uses_rls";
+  if (tk === "db_helper") return "uses_db_helper";
 
   return "calls";
 }

@@ -159,9 +159,11 @@ export async function handleInit(args: string[]): Promise<number> {
 
     // Generate or merge config
     const freshConfig = generateDefaultConfig(result);
-    if (isFirstRun || options.force) {
+    if (isFirstRun) {
       config = freshConfig;
     } else {
+      // Always merge — preserve agent edits (customBoundaries, workspace overrides, etc.)
+      // --force means rebuild the graph, NOT reset the config
       config = mergeConfig(config!, freshConfig);
     }
 

@@ -8,7 +8,7 @@
     "kk-mcp": "dist/bin/kk-mcp.js"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc",
+    "build": "rm -rf dist && tsc && chmod +x dist/bin/kk.js dist/bin/kk-mcp.js",
     "start": "node ./dist/bin/kk.js",
     "dev": "npm run build && node ./dist/bin/kk.js",
     "smoke": "npm run build && node ./dist/bin/kk.js help",
