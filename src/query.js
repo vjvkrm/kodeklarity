@@ -9,14 +9,9 @@ import {
   applyGraphPatch,
   initGraphDb,
 } from "./db.js";
-import {
-  normalizeInputRequestShape,
-  buildGraphFromRequest,
-  expandGraphFromOriginsWithAst,
-  buildGraphFromRequestFile,
-  verifyRequestEvidence,
-  formatVerificationPayload,
-} from "./build.js";
+// Legacy build.js imports removed — functions that used them
+// (rebuildGraphFromDiff, profileGraphWorkflow) are no longer available.
+// Use kk init / kk rebuild instead.
 
 export const RISK_FACTOR_WEIGHTS = Object.freeze({
   file_overlap_ratio: 0.3,

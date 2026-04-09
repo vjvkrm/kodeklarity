@@ -451,6 +451,50 @@ Run this first time you open a project, or after significant code changes. Use f
     }
   );
 
+  // --- kk_search ---
+  server.tool(
+    "kk_search",
+    `Search for nodes in the graph by name. Use this when you don't know the exact symbol name — search by partial name, file path, or keyword. Returns matching nodes with their kind, file, and line number.`,
+    {
+      term: z.string().describe("Search term — matches against symbol name, file path, or node ID"),
+    },
+    async ({ term }) => {
+      const dbPath = getDbPath(process.cwd());
+      const db = await getDbModule();
+      try {
+        await db.initGraphDb(dbPath);
+        const database = db.openDatabase(dbPath);
+        try {
+          db.runMigrations(database);
+          const pattern = `%${term}%`;
+          const matches = database.prepare(`
+            SELECT node_id, kind, symbol, file, line
+            FROM nodes
+            WHERE feature_name = ? AND (symbol LIKE ? OR file LIKE ? OR node_id LIKE ?)
+            ORDER BY CASE WHEN symbol LIKE ? THEN 0 ELSE 1 END, kind, symbol
+            LIMIT 50
+          `).all(GLOBAL_FEATURE, pattern, pattern, pattern, pattern) as any[];
+
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                status: "ok",
+                term,
+                count: matches.length,
+                matches: matches.map((m) => ({ symbol: m.symbol, kind: m.kind, file: m.file, line: m.line })),
+              }),
+            }],
+          };
+        } finally {
+          database.close();
+        }
+      } catch {
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: "No graph found. Run kk_init first." }) }] };
+      }
+    }
+  );
+
   // --- kk_compare ---
   server.tool(
     "kk_compare",

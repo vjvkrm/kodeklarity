@@ -69,6 +69,39 @@ export const drizzleAdapter: FrameworkAdapter = {
         ...content.matchAll(/db\.(select|insert|update|delete)\s*\((?:\s*\w+\s*)?\)\s*\.(?:from|into|set)\s*\(\s*(\w+)\s*\)/g),
       ];
 
+      // Find db.query.tableName.findMany/findFirst/findUnique calls (Drizzle query API)
+      const dbQueryOps = [
+        ...content.matchAll(/db\.query\.(\w+)\.(findMany|findFirst|findUnique)\s*\(/g),
+      ];
+
+      for (const qop of dbQueryOps) {
+        const queryTableName = qop[1];
+        const queryMethod = qop[2];
+        const qopLine = findLineNumber(content, qop[0]);
+
+        const containingFn = findContainingFunction(content, qopLine);
+        if (!containingFn) continue;
+
+        // Match table name — db.query uses the JS variable name (e.g. memberRoles),
+        // which matches the varName from pgTable definition
+        const tableNode = nodes.find(
+          (n) => n.kind === "table" && (n.metadata?.varName === queryTableName || n.symbol === queryTableName)
+        );
+        if (!tableNode) continue;
+
+        const callerNodeId = makeNodeId("function", rel, containingFn);
+        edges.push({
+          from: callerNodeId,
+          to: tableNode.id,
+          edgeType: "reads_table",
+          file: rel,
+          line: qopLine,
+          reason: `${containingFn} queries ${tableNode.symbol} via db.query.${queryTableName}.${queryMethod}`,
+          adapter: "drizzle",
+          metadata: { operation: queryMethod, queryApi: true, framework: "drizzle" },
+        });
+      }
+
       for (const op of dbOps) {
         const operation = op[1];
         const tableVar = op[2];

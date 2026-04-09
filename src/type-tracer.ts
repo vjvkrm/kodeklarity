@@ -399,6 +399,20 @@ function collectCallsInNode(
   const calls: CallInfo[] = [];
 
   function visit(child: ts.Node) {
+    // Handle dynamic imports: import('./module') or dynamic(() => import('./module'))
+    if (ts.isCallExpression(child) && child.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = child.arguments[0];
+      if (arg && ts.isStringLiteral(arg)) {
+        const line = sourceFile.getLineAndCharacterOfPosition(child.getStart(sourceFile)).line + 1;
+        calls.push({
+          text: `import(${arg.text})`,
+          symbolName: arg.text, // module specifier as symbol name
+          line,
+          node: child,
+        });
+      }
+    }
+
     if (ts.isCallExpression(child)) {
       const expr = child.expression;
       let symbolName = "";

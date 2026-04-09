@@ -14,6 +14,7 @@ kk impact <function_name>     # see what breaks if you change this
 
 **Before committing:**
 ```bash
+kk search <term>              # find symbols when you don't know the exact name
 kk risk                       # risk score 0-100 for your changes
 ```
 

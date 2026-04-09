@@ -20,6 +20,7 @@ This project uses `kk` for code relationship mapping. The graph is available via
 
 - Use `kk_downstream` to see what a function calls
 - Use `kk_why` to trace the path between two symbols
+- Use `kk_search` to find symbols when you don't know the exact name
 - Use `kk_status` to check graph health
 
 ## When results seem wrong

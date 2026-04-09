@@ -452,3 +452,70 @@ export async function handleStatus(args: string[]): Promise<number> {
     return 1;
   }
 }
+
+export async function handleSearch(args: string[]): Promise<number> {
+  const flags = parseCommandFlags(args);
+  const term = flags.symbol;
+
+  if (!term) {
+    console.error("Usage: kk search <term> [--json]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const pattern = `%${term}%`;
+      const matches = database.prepare(`
+        SELECT node_id, kind, symbol, file, line
+        FROM nodes
+        WHERE feature_name = ? AND (symbol LIKE ? OR file LIKE ? OR node_id LIKE ?)
+        ORDER BY
+          CASE WHEN symbol LIKE ? THEN 0 ELSE 1 END,
+          kind, symbol
+        LIMIT 50
+      `).all(GLOBAL_FEATURE, pattern, pattern, pattern, pattern) as Array<{
+        node_id: string; kind: string; symbol: string; file: string; line: number;
+      }>;
+
+      const result = {
+        status: "ok",
+        term,
+        count: matches.length,
+        matches: matches.map((m) => ({
+          symbol: m.symbol,
+          kind: m.kind,
+          file: m.file,
+          line: m.line,
+          node_id: m.node_id,
+        })),
+      };
+
+      emitResult(result, flags.json, (r) => {
+        if (r.count === 0) {
+          console.log(`  No nodes matching "${term}"`);
+          return;
+        }
+        console.log("");
+        console.log(`  ${r.count} matches for "${term}":`);
+        console.log("");
+        for (const m of r.matches) {
+          console.log(`    ${m.symbol.padEnd(35)} ${m.kind.padEnd(18)} ${m.file}:${m.line}`);
+        }
+        console.log("");
+      });
+
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Search failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}

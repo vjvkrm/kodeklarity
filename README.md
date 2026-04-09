@@ -163,6 +163,7 @@ kk risk                     # Risk score for my current changes
 | `kk side-effects <symbol>` | DB writes, API calls, events triggered |
 | `kk why --from X --to Y` | Explain how two symbols connect |
 | `kk risk` | Risk score (0-100) for uncommitted changes |
+| `kk search <term>` | Find nodes by name, file, or keyword |
 | `kk status` | Graph overview |
 
 Add `--json` to any command for machine-readable output. Add `--depth N` to control traversal depth.

@@ -29,6 +29,9 @@ kk why --from <symbol> --to <symbol>
 # Risk score for current uncommitted changes (zero-arg)
 kk risk
 
+# Find symbols by name
+kk search <term>
+
 # Graph overview
 kk status
 ```
@@ -294,6 +297,18 @@ Explains the shortest path between two symbols in the graph.
 Zero-arg command. Reads `git diff` of uncommitted changes and computes a risk score (0-100) based on downstream impact, side-effect reach, and graph coverage.
 
 **Use when:** Reviewing a PR or before committing to assess change risk.
+
+### `kk search <term> [--json]`
+
+Search for nodes in the graph by partial name, file path, or keyword. Use this when you don't know the exact symbol name.
+
+```bash
+kk search permission          # find all permission-related nodes
+kk search auth                # find all auth-related nodes
+kk search contracts           # find tables, queries, actions related to contracts
+```
+
+Returns up to 50 matches sorted by relevance (symbol name matches first, then file path matches).
 
 ### `kk status [--json]`
 

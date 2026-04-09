@@ -43,6 +43,9 @@ kk side-effects <symbol> --depth 4 --json
 kk why --from <symbolA> --to <symbolB> --depth 5 --json
 
 # Graph overview
+# Find symbols by name
+kk search <term> --json
+
 kk status --json
 ```
 
