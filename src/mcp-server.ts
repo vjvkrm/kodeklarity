@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -23,6 +24,53 @@ async function getDbModule() {
 
 function getDbPath(cwd: string): string {
   return path.join(cwd, DEFAULT_DB_PATH);
+}
+
+/** Resolve a symbol name to a node_id using the same logic as kk_impact/kk_upstream. */
+async function resolveSymbol(database: any, symbol: string): Promise<{ nodeId: string | null; error: string | null }> {
+  const query = await getQueryModule();
+  const result = query.resolveNodeReference(database, GLOBAL_FEATURE, symbol);
+  if (result.ok) {
+    return { nodeId: result.node.node_id, error: null };
+  }
+  if (result.error?.code === "ambiguous_reference") {
+    return { nodeId: null, error: `Symbol "${symbol}" matches multiple nodes: ${result.error.matches.join(", ")}. Be more specific.` };
+  }
+  return { nodeId: null, error: `No node found for "${symbol}". Use kk_search to find valid symbols.` };
+}
+
+/** Fetch memories for node_ids found in a traversal result. Returns [] if no memories or table missing. */
+async function fetchMemoriesForTraversal(dbPath: string, result: any): Promise<any[]> {
+  const items = result.impacts || result.upstreams || result.side_effects || [];
+  const startNodes = result.start_nodes || [];
+
+  // Collect all node_ids from the traversal
+  const nodeIds = new Set<string>();
+  for (const sn of startNodes) {
+    if (sn.node_id) nodeIds.add(sn.node_id);
+  }
+  for (const item of items) {
+    if (item.from_node_id) nodeIds.add(item.from_node_id);
+    if (item.to_node_id) nodeIds.add(item.to_node_id);
+  }
+
+  if (nodeIds.size === 0) return [];
+
+  const db = await getDbModule();
+  const database = db.openDatabase(dbPath);
+  try {
+    const ids = [...nodeIds];
+    const placeholders = ids.map(() => "?").join(",");
+    const memories = database.prepare(
+      `SELECT memory_id, node_id, agent, category, content, summary, updated_at
+       FROM memories WHERE node_id IN (${placeholders}) ORDER BY updated_at DESC`
+    ).all(...ids) as any[];
+    return memories;
+  } catch {
+    return []; // Table might not exist yet
+  } finally {
+    database.close();
+  }
 }
 
 export async function startMcpServer() {
@@ -171,15 +219,18 @@ Run this first time you open a project, or after significant code changes. Use f
       depth: z.number().optional().default(4).describe("Maximum traversal depth"),
     },
     async ({ symbol, depth }) => {
+      const dbPath = getDbPath(process.cwd());
       const query = await getQueryModule();
       const result = await query.queryImpact({
-        dbPath: getDbPath(process.cwd()),
+        dbPath,
         feature: GLOBAL_FEATURE,
         symbol,
         depth,
       });
       const summary = summarizeTraversal(result);
       const compact = compactifyTraversal(result);
+      const memories = await fetchMemoriesForTraversal(dbPath, result);
+      if (memories.length > 0) (compact as any).memories = memories;
       return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
@@ -193,15 +244,18 @@ Run this first time you open a project, or after significant code changes. Use f
       depth: z.number().optional().default(4).describe("Maximum traversal depth"),
     },
     async ({ symbol, depth }) => {
+      const dbPath = getDbPath(process.cwd());
       const query = await getQueryModule();
       const result = await query.queryUpstream({
-        dbPath: getDbPath(process.cwd()),
+        dbPath,
         feature: GLOBAL_FEATURE,
         symbol,
         depth,
       });
       const summary = summarizeTraversal(result);
       const compact = compactifyTraversal(result);
+      const memories = await fetchMemoriesForTraversal(dbPath, result);
+      if (memories.length > 0) (compact as any).memories = memories;
       return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
@@ -215,15 +269,18 @@ Run this first time you open a project, or after significant code changes. Use f
       depth: z.number().optional().default(4).describe("Maximum traversal depth"),
     },
     async ({ symbol, depth }) => {
+      const dbPath = getDbPath(process.cwd());
       const query = await getQueryModule();
       const result = await query.queryDownstream({
-        dbPath: getDbPath(process.cwd()),
+        dbPath,
         feature: GLOBAL_FEATURE,
         symbol,
         depth,
       });
       const summary = summarizeTraversal(result);
       const compact = compactifyTraversal(result);
+      const memories = await fetchMemoriesForTraversal(dbPath, result);
+      if (memories.length > 0) (compact as any).memories = memories;
       return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
@@ -237,15 +294,18 @@ Run this first time you open a project, or after significant code changes. Use f
       depth: z.number().optional().default(6).describe("Maximum traversal depth"),
     },
     async ({ symbol, depth }) => {
+      const dbPath = getDbPath(process.cwd());
       const query = await getQueryModule();
       const result = await query.querySideEffects({
-        dbPath: getDbPath(process.cwd()),
+        dbPath,
         feature: GLOBAL_FEATURE,
         symbol,
         depth,
       });
       const summary = summarizeTraversal(result);
       const compact = compactifyTraversal(result);
+      const memories = await fetchMemoriesForTraversal(dbPath, result);
+      if (memories.length > 0) (compact as any).memories = memories;
       return { content: [{ type: "text", text: summary + "\n\n" + JSON.stringify(compact) }] };
     }
   );
@@ -550,6 +610,376 @@ What kk found that I missed:
 The key point: it's not just about tokens — it's about completeness. Grep misses indirect dependencies, multi-hop chains, cross-workspace imports, and framework-specific connections (revalidation edges, table relationships).`;
 
       return { content: [{ type: "text", text: instructions }] };
+    }
+  );
+
+  // --- kk_memory_write ---
+  server.tool(
+    "kk_memory_write",
+    `Write a memory to the code graph. Memories persist across graph rebuilds and are surfaced automatically in impact/upstream queries.
+
+Attach to a node (gotcha about a specific function), an edge, or nothing (global wiki entry).
+
+Categories: "context" (general), "gotcha" (watch out), "decision" (why something was done this way), "warning" (fragile/dangerous), "wiki" (global knowledge).`,
+    {
+      content: z.string().describe("The memory content — what did you learn?"),
+      summary: z.string().optional().describe("Short one-line summary for text search"),
+      symbol: z.string().optional().describe("Symbol name to attach memory to (e.g. 'loginAction', 'users'). Resolved to node_id automatically."),
+      node_id: z.string().optional().describe("Direct node ID to attach to (use symbol instead if you know the name)"),
+      edge_id: z.string().optional().describe("Attach to a specific edge ID"),
+      agent: z.string().optional().default("unknown").describe("Which agent is writing this (e.g. 'claude', 'codex', 'cursor')"),
+      category: z.enum(["context", "gotcha", "decision", "warning", "wiki"]).optional().default("context").describe("Memory category"),
+      commit_sha: z.string().optional().describe("Git commit SHA when this memory was created"),
+    },
+    async ({ content, summary, symbol, node_id, edge_id, agent, category, commit_sha }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+
+      try {
+        db.runMigrations(database);
+
+        // Resolve symbol to node_id if symbol provided but node_id not
+        let resolvedNodeId = node_id || null;
+        if (!resolvedNodeId && symbol) {
+          const resolved = await resolveSymbol(database, symbol);
+          if (resolved.error) {
+            return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: resolved.error }) }] };
+          }
+          resolvedNodeId = resolved.nodeId;
+        }
+
+        const memoryId = `mem-${randomUUID().slice(0, 12)}`;
+        const now = new Date().toISOString();
+
+        database.prepare(`
+          INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
+          VALUES (@memory_id, @node_id, @edge_id, @agent, @category, @content, @summary, @commit_sha, @created_at, @updated_at)
+        `).run({
+          memory_id: memoryId,
+          node_id: resolvedNodeId,
+          edge_id: edge_id || null,
+          agent: agent || "unknown",
+          category: category || "context",
+          content,
+          summary: summary || null,
+          commit_sha: commit_sha || null,
+          created_at: now,
+          updated_at: now,
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ status: "ok", memory_id: memoryId, node_id: resolvedNodeId, symbol: symbol || null, category }),
+          }],
+        };
+      } finally {
+        database.close();
+      }
+    }
+  );
+
+  // --- kk_memory_update ---
+  server.tool(
+    "kk_memory_update",
+    `Update an existing memory. Only provided fields are updated — omit fields to keep their current value.`,
+    {
+      memory_id: z.string().describe("The memory ID to update"),
+      content: z.string().optional().describe("New content"),
+      summary: z.string().optional().describe("New summary"),
+      category: z.enum(["context", "gotcha", "decision", "warning", "wiki"]).optional().describe("New category"),
+      symbol: z.string().optional().describe("Change attached node by symbol name (resolved to node_id)"),
+      node_id: z.string().optional().describe("Change attached node by direct node ID"),
+      edge_id: z.string().optional().describe("Change attached edge"),
+    },
+    async ({ memory_id, content, summary, category, symbol, node_id, edge_id }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+
+      try {
+        db.runMigrations(database);
+
+        const existing = database.prepare("SELECT * FROM memories WHERE memory_id = ?").get(memory_id) as any;
+        if (!existing) {
+          return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: `Memory ${memory_id} not found` }) }] };
+        }
+
+        const updates: string[] = [];
+        const params: any = { memory_id };
+
+        if (content !== undefined) { updates.push("content = @content"); params.content = content; }
+        if (summary !== undefined) { updates.push("summary = @summary"); params.summary = summary; }
+        if (category !== undefined) { updates.push("category = @category"); params.category = category; }
+        if (symbol !== undefined && node_id === undefined) {
+          const resolved = await resolveSymbol(database, symbol);
+          if (resolved.nodeId) { updates.push("node_id = @node_id"); params.node_id = resolved.nodeId; }
+        }
+        if (node_id !== undefined) { updates.push("node_id = @node_id"); params.node_id = node_id; }
+        if (edge_id !== undefined) { updates.push("edge_id = @edge_id"); params.edge_id = edge_id; }
+
+        if (updates.length === 0) {
+          return { content: [{ type: "text", text: JSON.stringify({ status: "ok", memory_id, updated: false, message: "No fields to update" }) }] };
+        }
+
+        updates.push("updated_at = @updated_at");
+        params.updated_at = new Date().toISOString();
+
+        database.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE memory_id = @memory_id`).run(params);
+
+        return { content: [{ type: "text", text: JSON.stringify({ status: "ok", memory_id, updated: true }) }] };
+      } finally {
+        database.close();
+      }
+    }
+  );
+
+  // --- kk_memory_read ---
+  server.tool(
+    "kk_memory_read",
+    `Read memories attached to a symbol or node. Resolves symbol names to node IDs automatically. If no symbol provided, returns global/wiki memories.`,
+    {
+      symbol: z.string().optional().describe("Symbol name to read memories for (resolved to node IDs)"),
+      node_id: z.string().optional().describe("Direct node ID to read memories for"),
+      category: z.string().optional().describe("Filter by category"),
+    },
+    async ({ symbol, node_id, category }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+
+      try {
+        db.runMigrations(database);
+
+        // Resolve symbol to node_ids
+        const nodeIds: string[] = [];
+        if (node_id) {
+          nodeIds.push(node_id);
+        } else if (symbol) {
+          const resolved = await resolveSymbol(database, symbol);
+          if (resolved.nodeId) {
+            nodeIds.push(resolved.nodeId);
+          }
+          // If ambiguous or not found, return what we have (empty = global memories)
+        }
+
+        let memories: any[];
+        if (nodeIds.length > 0) {
+          const placeholders = nodeIds.map(() => "?").join(",");
+          const catFilter = category ? " AND category = ?" : "";
+          const params = [...nodeIds, ...(category ? [category] : [])];
+          memories = database.prepare(
+            `SELECT * FROM memories WHERE node_id IN (${placeholders})${catFilter} ORDER BY updated_at DESC`
+          ).all(...params);
+
+          // Also get edge memories touching these nodes
+          const edgeMemories = database.prepare(
+            `SELECT m.* FROM memories m JOIN edges e ON m.edge_id = e.edge_id AND e.feature_name = ?
+             WHERE (e.from_node_id IN (${placeholders}) OR e.to_node_id IN (${placeholders}))${catFilter}
+             ORDER BY m.updated_at DESC`
+          ).all(GLOBAL_FEATURE, ...nodeIds, ...nodeIds, ...(category ? [category] : []));
+          const seenIds = new Set(memories.map((m: any) => m.memory_id));
+          for (const em of edgeMemories) {
+            if (!seenIds.has((em as any).memory_id)) memories.push(em);
+          }
+        } else {
+          // No symbol/node — return global memories
+          const catFilter = category ? " AND category = ?" : "";
+          memories = database.prepare(
+            `SELECT * FROM memories WHERE node_id IS NULL AND edge_id IS NULL${catFilter} ORDER BY updated_at DESC LIMIT 50`
+          ).all(...(category ? [category] : []));
+        }
+
+        // Check for stale memories (node no longer exists)
+        for (const mem of memories) {
+          if (mem.node_id) {
+            const exists = database.prepare(
+              "SELECT 1 FROM nodes WHERE feature_name = ? AND node_id = ? LIMIT 1"
+            ).get(GLOBAL_FEATURE, mem.node_id);
+            (mem as any).stale = !exists;
+          }
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "ok",
+              symbol: symbol || null,
+              node_ids: nodeIds,
+              count: memories.length,
+              memories: memories.map((m: any) => ({
+                memory_id: m.memory_id,
+                node_id: m.node_id,
+                edge_id: m.edge_id,
+                agent: m.agent,
+                category: m.category,
+                content: m.content,
+                summary: m.summary,
+                commit_sha: m.commit_sha,
+                stale: m.stale || false,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+              })),
+            }),
+          }],
+        };
+      } finally {
+        database.close();
+      }
+    }
+  );
+
+  // --- kk_memory_search ---
+  server.tool(
+    "kk_memory_search",
+    `Full-text search across all agent memories. Use this to find memories by keyword — e.g. "permission", "billing", "race condition".`,
+    {
+      query: z.string().describe("Search query (keywords)"),
+      category: z.string().optional().describe("Filter by category"),
+      limit: z.number().optional().default(20).describe("Max results"),
+    },
+    async ({ query, category, limit }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+
+      try {
+        db.runMigrations(database);
+
+        // Add prefix matching: "migration" → "migration*" so it matches "migrations"
+        const ftsQuery = query.trim().split(/\s+/).map((w) => `${w}*`).join(" ");
+        const catFilter = category ? " AND m.category = ?" : "";
+        const params: any[] = [ftsQuery, ...(category ? [category] : []), limit || 20];
+
+        const results = database.prepare(`
+          SELECT m.*, rank
+          FROM memories_fts fts
+          JOIN memories m ON m.rowid = fts.rowid
+          WHERE memories_fts MATCH ?${catFilter}
+          ORDER BY rank
+          LIMIT ?
+        `).all(...params) as any[];
+
+        // Enrich with node info
+        for (const r of results) {
+          if (r.node_id) {
+            const node = database.prepare(
+              "SELECT symbol, kind, file FROM nodes WHERE feature_name = ? AND node_id = ?"
+            ).get(GLOBAL_FEATURE, r.node_id) as any;
+            r.node_symbol = node?.symbol || null;
+            r.node_kind = node?.kind || null;
+            r.node_file = node?.file || null;
+            r.stale = !node;
+          }
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "ok",
+              query,
+              count: results.length,
+              memories: results.map((m: any) => ({
+                memory_id: m.memory_id,
+                node_id: m.node_id,
+                node_symbol: m.node_symbol || null,
+                node_kind: m.node_kind || null,
+                node_file: m.node_file || null,
+                agent: m.agent,
+                category: m.category,
+                content: m.content,
+                summary: m.summary,
+                stale: m.stale || false,
+                updated_at: m.updated_at,
+              })),
+            }),
+          }],
+        };
+      } finally {
+        database.close();
+      }
+    }
+  );
+
+  // --- kk_memory_list ---
+  server.tool(
+    "kk_memory_list",
+    `List all agent memories, optionally filtered by category or agent. Returns most recently updated first.`,
+    {
+      category: z.string().optional().describe("Filter by category (context, gotcha, decision, warning, wiki)"),
+      agent: z.string().optional().describe("Filter by agent name (claude, codex, cursor, etc.)"),
+      limit: z.number().optional().default(50).describe("Max results"),
+    },
+    async ({ category, agent, limit }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+
+      try {
+        db.runMigrations(database);
+
+        const filters: string[] = [];
+        const params: any[] = [];
+        if (category) { filters.push("category = ?"); params.push(category); }
+        if (agent) { filters.push("agent = ?"); params.push(agent); }
+        const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+        params.push(limit || 50);
+
+        const memories = database.prepare(
+          `SELECT * FROM memories ${where} ORDER BY updated_at DESC LIMIT ?`
+        ).all(...params) as any[];
+
+        // Enrich with node info
+        for (const m of memories) {
+          if (m.node_id) {
+            const node = database.prepare(
+              "SELECT symbol, kind, file FROM nodes WHERE feature_name = ? AND node_id = ?"
+            ).get(GLOBAL_FEATURE, m.node_id) as any;
+            m.node_symbol = node?.symbol || null;
+            m.node_kind = node?.kind || null;
+            m.stale = !node;
+          }
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "ok",
+              count: memories.length,
+              memories: memories.map((m: any) => ({
+                memory_id: m.memory_id,
+                node_id: m.node_id,
+                node_symbol: m.node_symbol || null,
+                node_kind: m.node_kind || null,
+                edge_id: m.edge_id,
+                agent: m.agent,
+                category: m.category,
+                content: m.content,
+                summary: m.summary,
+                stale: m.stale || false,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+              })),
+            }),
+          }],
+        };
+      } finally {
+        database.close();
+      }
     }
   );
 

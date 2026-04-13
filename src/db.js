@@ -171,6 +171,54 @@ ON build_edges(feature_name, edge_type);
 `,
     ],
   },
+  {
+    id: "004_agent_memory",
+    statements: [
+      `
+CREATE TABLE IF NOT EXISTS memories (
+  memory_id TEXT PRIMARY KEY,
+  node_id TEXT,
+  edge_id TEXT,
+  agent TEXT NOT NULL DEFAULT 'unknown',
+  category TEXT NOT NULL DEFAULT 'context',
+  content TEXT NOT NULL,
+  summary TEXT,
+  commit_sha TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_node ON memories(node_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_edge ON memories(edge_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);`,
+      `
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  content, summary,
+  content='memories', content_rowid='rowid'
+);
+`,
+      `
+CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, content, summary)
+  VALUES (NEW.rowid, NEW.content, COALESCE(NEW.summary, ''));
+END;
+`,
+      `
+CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content, summary)
+  VALUES ('delete', OLD.rowid, OLD.content, COALESCE(OLD.summary, ''));
+END;
+`,
+      `
+CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content, summary)
+  VALUES ('delete', OLD.rowid, OLD.content, COALESCE(OLD.summary, ''));
+  INSERT INTO memories_fts(rowid, content, summary)
+  VALUES (NEW.rowid, NEW.content, COALESCE(NEW.summary, ''));
+END;
+`,
+    ],
+  },
 ];
 
 export function openDatabase(dbPath) {

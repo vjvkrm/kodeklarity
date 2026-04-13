@@ -1,16 +1,15 @@
 <div align="center">
 
-# 🔍 KodeKlarity
+# 🧠 KodeKlarity
 
-### Your codebase has thousands of hidden connections.<br>Now you can see all of them.
+### Shared knowledge & memory of your code, for AI agents.
 
- "Make Claude & Codex actually understand your codebase"
-
-*The code graph that gives AI agents — and developers — the full picture<br>before a single line of code is changed.*
+*The code graph + persistent memory layer that makes any coding agent actually understand your codebase —<br>and remember what it learned for the next session.*
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white)](#)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6)](#)
 [![Zero LLM](https://img.shields.io/badge/Zero_LLM-pure_static_analysis-22C55E)](#)
+[![Memory](https://img.shields.io/badge/Agent_Memory-persistent-F59E0B)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#)
 
 </div>
@@ -19,27 +18,15 @@
 
 <br>
 
-> 🎯 **Install it. Tell Claude or Codex to use it. That's it.**
->
-> You don't learn a new tool. You don't change your workflow. You just give your AI assistant the ability to see how your entire codebase connects — every page, every API, every database table, every background job. It checks impact before making changes, catches ripple effects you'd miss, and scores risk on every diff.
->
-> **Your AI assistant gets smarter. Your code gets safer. You ship faster.**
+## Every coding agent starts from zero. That's the problem.
 
-<br>
+Your coding agent figures out your billing flow, discovers a gotcha about Stripe ordering, ships a fix. Next session, it has no memory. Switch tools and the new one starts from scratch. Every session, every agent, rediscovers the same things — and guesses based on grep, missing the indirect connections that break production.
 
-## ✨ Built for how teams actually work
+**KodeKlarity is the shared brain that fixes this.**
 
-🎮 **Vibe coding without the fear** — Move fast, let KodeKlarity watch your back. It catches the ripple effects you'd miss.
+One persistent knowledge layer that every coding agent reads and writes. It maps your whole codebase automatically (symbol-level accuracy, not grep), and it accumulates what your agents learn — gotchas, decisions, warnings — attached to the exact functions and tables they apply to. The next agent picks up where the last one left off.
 
-🤖 **Make Claude & Codex actually understand your codebase** — They stop guessing and start seeing the full map before touching any code. Fewer rollbacks, fewer "what happened?" moments.
-
-👀 **Code reviews in minutes, not hours** — Reviewer sees exactly what a PR affects: which pages, tables, jobs, and APIs. No more guessing.
-
-🚀 **New team member? No problem** — "Show me everything connected to payments" is a single command. Onboarding goes from weeks to days.
-
-🔧 **Refactor with confidence** — Know the blast radius before you start. Not after CI fails.
-
-😴 **Ship to production, sleep at night** — Risk score tells you if your diff is safe. Before you push.
+Zero LLM tokens. Zero guessing. Every session, smarter about *your* codebase.
 
 <br>
 
@@ -47,14 +34,46 @@
 
 <br>
 
-## 🔄 Before & After
+## What your agent sees when it asks about a symbol
 
-| | Before KodeKlarity 😰 | After KodeKlarity 😎 |
+```
+$ kk impact updateSubscription
+
+  updateSubscription (server_action)
+    ├── invokes_service → withServiceContext
+    ├── writes_table    → subscriptions
+    ├── writes_table    → invoices
+    ├── triggers_job    → send-billing-email
+    ├── revalidates     → /billing page
+    └── 47 downstream connections
+
+  3 memories from past sessions:
+    [gotcha]  updateSubscription
+      "Must sync Stripe before DB write — reconcileStripeState fixes mismatches"
+    [decision] withServiceContext
+      "Mandatory RLS wrapper. Direct queries silently return empty."
+    [warning] subscriptions table
+      "Soft-delete only. Hard-delete breaks Stripe webhook reconciliation."
+```
+
+One query returns the full map *plus* every relevant thing past agents learned. No hunting through CLAUDE.md files, no rediscovering gotchas, no grepping for callers.
+
+<br>
+
+---
+
+<br>
+
+## Why this is different
+
+| | Without KodeKlarity | With KodeKlarity |
 |---|---|---|
-| 💥 | *"I changed the user service and the billing page broke. How?"* | *"Changing user service affects 3 pages, 2 background jobs, and the billing API. Here's the chain."* |
-| 🤔 | *"Is it safe to refactor this?"* | *"This function has 686 dependents. Here are the 12 most critical ones."* |
-| 📊 | *"How risky is this pull request?"* | *"Risk score: 73/100. Touches 4 database tables and triggers 2 external API calls."* |
-| 🤖 | *"My AI assistant made a change that broke something downstream"* | *Claude/Codex checks impact **before** making changes. Every time. Automatically.* |
+| 🧩 **Codebase understanding** | Agent uses grep, misses indirect deps, cross-workspace imports, framework edges | Symbol-level accuracy via TypeScript compiler. 750+ nodes, 43k+ edges on real monorepos. |
+| 🧠 **Learning across sessions** | Every session starts fresh. Same gotchas rediscovered. Same mistakes repeated. | Memories persist and auto-surface at the right moment. |
+| 🔀 **Cross-tool knowledge** | Each tool has its own memory silo | One shared brain across every coding agent — MCP-compatible out of the box. |
+| 💥 **Accuracy** | Agent guesses impact from pattern matching | Exact downstream traversal with confidence scores. |
+| 💰 **Cost** | Rediscovery burns tokens every session | Static analysis + persistent memory. Zero LLM tokens. |
+| 😴 **Risk before commit** | Hope the tests catch it | `kk risk` scores your diff 0–100 from actual graph impact. |
 
 <br>
 
@@ -62,19 +81,19 @@
 
 <br>
 
-## 🔌 Install once, every AI session gets better
+## Built for real workflows
 
-<div align="center">
+🎮 **Vibe coding, safely** — Move fast, let KodeKlarity watch your back. Your agent sees the map, respects past decisions, scores your risk before commit.
 
-**Claude Code** · **Codex** · **Cursor** · **Windsurf** · *any MCP-compatible agent*
+🤖 **Agents that stop guessing** — Impact check before every change, past gotchas surfaced automatically, new learnings written back. Fewer rollbacks.
 
-</div>
+🔄 **Works across every coding agent** — Knowledge compounds across tools. What one session learns, every future session inherits.
 
-```bash
-npm install -g kodeklarity
-```
+👀 **Code reviews in minutes** — Reviewer sees exactly what a PR affects: pages, tables, jobs, APIs. Plus memories explaining *why* the code is shaped this way.
 
-That's the setup. KodeKlarity runs as a background tool your AI assistant calls automatically. No extra prompting. No copy-pasting context. No new commands to memorize. Just tell Claude *"use kk to check impact before making changes"* and it handles the rest.
+🚀 **Fast onboarding** — "Show me everything connected to payments" is one command. Humans and agents ramp in minutes, not weeks.
+
+🔧 **Refactor with confidence** — Know the blast radius before you start. See past decisions attached to every function.
 
 <br>
 
@@ -82,58 +101,19 @@ That's the setup. KodeKlarity runs as a background tool your AI assistant calls 
 
 <br>
 
-## ⚡ See it in action
+## How it works
 
-```
-$ kk impact updateUser
+**Pure static analysis. No LLM. Framework-aware.**
 
-  updateUser
-    ├── affects     → Settings page
-    ├── depends on  → Authentication
-    ├── connects to → User sync service
-    ├── touches     → Users table
-    ├── touches     → Sessions table
-    └── 847 total connections found
-```
+1. **Discovers boundaries automatically** — Detects Next.js, Drizzle, NestJS, Express, Trigger.dev from `package.json`. Knows `'use server'` is a mutation boundary, `pgTable()` is a data boundary, `task()` is an async boundary.
 
-```
-$ kk risk
+2. **Traces with the TypeScript compiler** — Uses `ts.createProgram` (the real type checker) to resolve calls through generics, aliases, barrel re-exports, and monorepo imports. Symbol-level precision.
 
-  Changed files: 4
-  Affected nodes:      12
-  Downstream impacts:  89
-  Side effects:        3
-  Risk score:          73/100 (high)
-```
+3. **Accumulates memory** — Agents write learnings via `kk_memory_write`. Tied to graph nodes. Full-text searchable. Surfaces automatically when any agent queries impact/upstream/downstream.
 
-<br>
+4. **Improves over time** — Config auto-updates as agents teach it about project-specific patterns. Memories build up. Each session is smarter than the last.
 
-## 🧩 How it works
-
-| Step | What happens |
-|------|-------------|
-| **1. `kk init`** | Scans your project in seconds. Understands Next.js, Drizzle, NestJS, Express, Trigger.dev out of the box. Zero config needed. |
-| **2. Builds a map** | Every route, API, service, database table, and background job — plus how they connect to each other. |
-| **3. Ask anything** | What breaks if I change this? What depends on that? How risky are my changes? Answers in milliseconds. |
-| **4. Gets smarter** | Your AI assistant tunes the map over time by editing a simple config file. Every session, more accurate. Automatically. |
-
-<div align="center">
-
-**Tested on production monorepos: 750+ components · 43,000+ connections · 5 seconds · Zero AI cost**
-
-</div>
-
-## How It Works
-
-**Zero LLM. Pure static analysis. Framework-aware.**
-
-1. **Discovers boundaries automatically** — Reads your `package.json`, detects Next.js, Drizzle, NestJS, Express, Trigger.dev. Knows that `'use server'` is a mutation boundary, `pgTable()` is a data boundary, `task()` is an async boundary. No config needed.
-
-2. **Traces relationships with the TypeScript compiler** — Uses `ts.createProgram` (the actual TypeScript type checker) to resolve which function calls which, through generics, aliases, barrel re-exports, and monorepo workspace imports. Symbol-level precision, not grep.
-
-3. **Gets smarter every session** — AI agents edit `.kodeklarity/config.json` to teach it about project-specific patterns (your query layer, your service layer, your validation schemas). Next `kk rebuild` picks up the new patterns. Config persists across sessions — every agent benefits from previous improvements.
-
-**Result on a production monorepo:** 750+ nodes, 43k+ edges. Routes, server actions, tables, background jobs — all connected. 5 seconds, 0 tokens.
+**Tested on production monorepos:** 750+ nodes · 43,000+ connections · 5 seconds · 0 LLM tokens.
 
 ---
 
@@ -165,12 +145,33 @@ kk risk                     # Risk score for my current changes
 | `kk risk` | Risk score (0-100) for uncommitted changes |
 | `kk search <term>` | Find nodes by name, file, or keyword |
 | `kk status` | Graph overview |
+| `kk memory write <content> [--node <symbol>]` | Save a memory attached to a node (or global) |
+| `kk memory update <memory_id>` | Update an existing memory |
+| `kk memory read [--node <symbol>]` | Read memories for a symbol (or global wiki) |
+| `kk memory search <query>` | Full-text search across all memories |
+| `kk memory list [--category <cat>]` | Browse all memories |
 
 Add `--json` to any command for machine-readable output. Add `--depth N` to control traversal depth.
 
+## Memory categories
+
+| Category | When to use |
+|----------|-------------|
+| `gotcha` | Watch out — easy to get wrong, not obvious from the code |
+| `decision` | Why it's done this way — don't "fix" it |
+| `warning` | Fragile, dangerous, or deprecated |
+| `context` | General background |
+| `wiki` | Global knowledge, not tied to any node |
+
+Memories survive every `kk init` / `kk rebuild`. Full-text searchable (SQLite FTS5 with prefix matching). Auto-surface in `kk_impact` / `kk_upstream` / `kk_downstream` / `kk_side_effects`. Orphaned memories flagged `stale: true` when the node is deleted.
+
 ## MCP Server
 
-10 tools for AI agents: `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`
+15 tools for AI agents:
+
+**Graph queries:** `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`, `kk_search`, `kk_compare`
+
+**Agent memory:** `kk_memory_write`, `kk_memory_update`, `kk_memory_read`, `kk_memory_search`, `kk_memory_list`
 
 ### Claude Code
 
@@ -198,6 +199,50 @@ Add to `.claude/settings.json`:
   }
 }
 ```
+
+---
+
+## Tell Your Agent to Use It
+
+Installing the MCP server exposes the tools, but your agent won't know **when** to use them. Drop this snippet into your agent's rules file:
+
+- **Claude Code** → `CLAUDE.md` (project root) or `~/.claude/CLAUDE.md` (global)
+- **Codex** → `AGENTS.md` (project root)
+- **Cursor** → `.cursor/rules/kodeklarity.md` or `.cursorrules`
+- **Windsurf** → `.windsurfrules`
+
+```markdown
+## KodeKlarity (code graph + agent memory)
+
+This project has a code graph via `kk` (MCP server: `kodeklarity`).
+
+**Before modifying any function, route, or table:**
+- Call `kk_impact <symbol>` to see downstream blast radius
+- Call `kk_upstream <symbol>` to find all callers
+- Review any `memories` returned in the response — they contain gotchas and
+  decisions from past sessions that you must respect
+
+**Before committing:**
+- Call `kk_risk` to score the diff (0-100)
+
+**When you learn something non-obvious:**
+- Call `kk_memory_write` with a `gotcha`, `decision`, or `warning` category
+- Pass the `symbol` name (same format as `kk_impact`), not a raw node_id
+- Include a short `summary` for full-text search
+- Write memories for: hidden constraints, deliberate non-obvious choices,
+  known fragility, mid-migration state — NOT for things already in commit
+  messages or obvious from reading the code
+
+**If the graph is stale:**
+- Call `kk_rebuild` (skips if no changes; fast incremental diff)
+
+**If a symbol isn't found:**
+- Call `kk_search <term>` to find similar node names
+- If a whole layer is missing (services, queries), edit
+  `.kodeklarity/config.json` to add `customBoundaries`, then `kk_rebuild --force`
+```
+
+That's it. After this, the agent queries the graph before making changes, respects memories from past sessions, and writes new memories when it learns something non-obvious.
 
 ---
 
@@ -348,6 +393,11 @@ One config edit found 222 new nodes and 15,814 new edges. Config persists across
 
 SQLite database at `.kodeklarity/index/graph.sqlite`. Queries use recursive CTEs for traversal. Nodes and edges have confidence scores (`high`/`medium`/`low`).
 
+Contains three persistent stores:
+- `nodes`, `edges` — rebuilt on every `kk init` / `kk rebuild`
+- `memories` — agent-written knowledge, **survives rebuilds**, indexed by FTS5
+- `builds`, `build_nodes`, `build_edges` — historical snapshots per build
+
 ### Type-Aware Tracing
 
 Uses `ts.createProgram` for whole-project type resolution alongside file-level import tracing. Two precision tiers:
@@ -378,7 +428,7 @@ src/
   trace.ts                   File-level import chain traversal
   type-tracer.ts             Type-aware tracing via ts.createProgram
   store.ts                   SQLite graph storage
-  mcp-server.ts              MCP server (10 tools)
+  mcp-server.ts              MCP server (15 tools incl. agent memory)
   discover/                  Discovery engine
     index.ts                 Orchestrator
     workspace.ts             Monorepo workspace detection

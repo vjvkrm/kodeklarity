@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getWorkingChanges } from "./git.js";
 
@@ -52,6 +53,14 @@ function parseCommandFlags(args: string[]): CommandFlags {
 
 async function getQueryModule() {
   return await import("./query.js");
+}
+
+/** Resolve a symbol name to a node_id using the same logic as kk impact/upstream. */
+async function resolveSymbolToNodeId(database: any, symbol: string): Promise<string | null> {
+  const query = await getQueryModule();
+  const result = query.resolveNodeReference(database, GLOBAL_FEATURE, symbol);
+  if (result.ok) return result.node.node_id;
+  return null;
 }
 
 function emitResult(data: unknown, json: boolean, humanPrinter: (d: any) => void): void {
@@ -516,6 +525,339 @@ export async function handleSearch(args: string[]): Promise<number> {
     }
   } catch (err) {
     console.error(`Search failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+// --- Memory commands ---
+
+interface MemoryFlags {
+  json: boolean;
+  dbPath: string;
+  node?: string;
+  category?: string;
+  summary?: string;
+  agent?: string;
+  content?: string;
+  memoryId?: string;
+  limit: number;
+}
+
+function parseMemoryFlags(args: string[]): MemoryFlags {
+  const flags: MemoryFlags = {
+    json: false,
+    dbPath: path.join(process.cwd(), DEFAULT_DB_PATH),
+    limit: 50,
+  };
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--json") { flags.json = true; continue; }
+    if (arg === "--db-path" && args[i + 1]) { flags.dbPath = args[++i]; continue; }
+    if (arg === "--node" && args[i + 1]) { flags.node = args[++i]; continue; }
+    if (arg === "--category" && args[i + 1]) { flags.category = args[++i]; continue; }
+    if (arg === "--summary" && args[i + 1]) { flags.summary = args[++i]; continue; }
+    if (arg === "--agent" && args[i + 1]) { flags.agent = args[++i]; continue; }
+    if (arg === "--content" && args[i + 1]) { flags.content = args[++i]; continue; }
+    if (arg === "--limit" && args[i + 1]) { flags.limit = parseInt(args[++i], 10) || 50; continue; }
+    if (!arg.startsWith("--")) { positional.push(arg); }
+  }
+
+  // First positional is content for write, query for search, memory_id for update
+  if (positional.length > 0) flags.content = positional[0];
+  if (positional.length > 1) flags.memoryId = positional[0]; // for update: first is id, second is content
+
+  return flags;
+}
+
+export async function handleMemory(args: string[]): Promise<number> {
+  const [subcommand, ...rest] = args;
+
+  if (!subcommand || subcommand === "help") {
+    console.log(`
+kk memory — Agent memory system
+
+Usage:
+  kk memory write <content> [--node <symbol>] [--category <cat>] [--summary <text>] [--agent <name>]
+  kk memory update <memory_id> [--content <text>] [--summary <text>] [--category <cat>]
+  kk memory read [--node <symbol>] [--category <cat>]
+  kk memory search <query> [--category <cat>] [--limit N]
+  kk memory list [--category <cat>] [--agent <name>] [--limit N]
+
+Categories: context, gotcha, decision, warning, wiki
+`);
+    return 0;
+  }
+
+  if (subcommand === "write") return handleMemoryWrite(rest);
+  if (subcommand === "update") return handleMemoryUpdate(rest);
+  if (subcommand === "read") return handleMemoryRead(rest);
+  if (subcommand === "search") return handleMemorySearch(rest);
+  if (subcommand === "list") return handleMemoryList(rest);
+
+  console.error(`Unknown memory subcommand: ${subcommand}`);
+  return 1;
+}
+
+async function handleMemoryWrite(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+  if (!flags.content) {
+    console.error("Usage: kk memory write <content> [--node <symbol>] [--category <cat>]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      // Resolve --node symbol to node_id
+      let nodeId: string | null = null;
+      if (flags.node) {
+        nodeId = await resolveSymbolToNodeId(database, flags.node);
+        if (!nodeId) {
+          console.error(`Warning: No node found for symbol "${flags.node}" — saving as global memory`);
+        }
+      }
+
+      const memoryId = `mem-${randomUUID().slice(0, 12)}`;
+      const now = new Date().toISOString();
+
+      database.prepare(`
+        INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
+      `).run(memoryId, nodeId, flags.agent || "cli", flags.category || "context", flags.content, flags.summary || null, now, now);
+
+      const result = { status: "ok", memory_id: memoryId, node_id: nodeId, category: flags.category || "context" };
+      emitResult(result, flags.json, (r) => {
+        console.log(`  Memory saved: ${r.memory_id}${r.node_id ? ` → ${r.node_id}` : " (global)"}`);
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory write failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryUpdate(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+  const memoryId = flags.content; // first positional arg is memory_id for update
+  if (!memoryId) {
+    console.error("Usage: kk memory update <memory_id> [--content <text>] [--summary <text>] [--category <cat>]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const existing = database.prepare("SELECT * FROM memories WHERE memory_id = ?").get(memoryId);
+      if (!existing) {
+        console.error(`Memory ${memoryId} not found`);
+        return 1;
+      }
+
+      const updates: string[] = [];
+      const params: any[] = [];
+
+      // For update, --content flag is the new content (not positional)
+      const newContent = args.find((a, i) => args[i - 1] === "--content");
+      if (newContent) { updates.push("content = ?"); params.push(newContent); }
+      if (flags.summary) { updates.push("summary = ?"); params.push(flags.summary); }
+      if (flags.category) { updates.push("category = ?"); params.push(flags.category); }
+
+      if (updates.length === 0) {
+        console.error("No fields to update. Use --content, --summary, or --category.");
+        return 1;
+      }
+
+      updates.push("updated_at = ?");
+      params.push(new Date().toISOString());
+      params.push(memoryId);
+
+      database.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE memory_id = ?`).run(...params);
+
+      const result = { status: "ok", memory_id: memoryId, updated: true };
+      emitResult(result, flags.json, () => console.log(`  Memory updated: ${memoryId}`));
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory update failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryRead(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      let memories: any[];
+      if (flags.node) {
+        const resolvedId = await resolveSymbolToNodeId(database, flags.node);
+        if (!resolvedId) {
+          console.log(`  No nodes matching "${flags.node}"`);
+          return 0;
+        }
+        const nodeIds = [resolvedId];
+        const placeholders = nodeIds.map(() => "?").join(",");
+        const catFilter = flags.category ? " AND category = ?" : "";
+        memories = database.prepare(
+          `SELECT * FROM memories WHERE node_id IN (${placeholders})${catFilter} ORDER BY updated_at DESC`
+        ).all(...nodeIds, ...(flags.category ? [flags.category] : []));
+      } else {
+        // Global memories
+        const catFilter = flags.category ? " AND category = ?" : "";
+        memories = database.prepare(
+          `SELECT * FROM memories WHERE node_id IS NULL AND edge_id IS NULL${catFilter} ORDER BY updated_at DESC LIMIT ?`
+        ).all(...(flags.category ? [flags.category] : []), flags.limit);
+      }
+
+      const result = { status: "ok", count: memories.length, memories };
+      emitResult(result, flags.json, (r) => {
+        if (r.count === 0) {
+          console.log("  No memories found.");
+          return;
+        }
+        console.log("");
+        for (const m of r.memories) {
+          const tag = m.node_id ? `[${m.category}] → ${m.node_id}` : `[${m.category}] (global)`;
+          console.log(`  ${m.memory_id}  ${tag}`);
+          console.log(`    ${m.content}`);
+          if (m.summary) console.log(`    Summary: ${m.summary}`);
+          console.log(`    Agent: ${m.agent} | Updated: ${m.updated_at}`);
+          console.log("");
+        }
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory read failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemorySearch(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+  const query = flags.content; // first positional is the search query
+  if (!query) {
+    console.error("Usage: kk memory search <query> [--category <cat>] [--limit N]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      // Add prefix matching: "migration" → "migration*" so it matches "migrations"
+      const ftsQuery = query.trim().split(/\s+/).map((w: string) => `${w}*`).join(" ");
+      const catFilter = flags.category ? " AND m.category = ?" : "";
+      const params: any[] = [ftsQuery, ...(flags.category ? [flags.category] : []), flags.limit];
+
+      const results = database.prepare(`
+        SELECT m.*, rank
+        FROM memories_fts fts
+        JOIN memories m ON m.rowid = fts.rowid
+        WHERE memories_fts MATCH ?${catFilter}
+        ORDER BY rank
+        LIMIT ?
+      `).all(...params) as any[];
+
+      const result = { status: "ok", query, count: results.length, memories: results };
+      emitResult(result, flags.json, (r) => {
+        if (r.count === 0) {
+          console.log(`  No memories matching "${query}"`);
+          return;
+        }
+        console.log("");
+        console.log(`  ${r.count} memories matching "${query}":`);
+        console.log("");
+        for (const m of r.memories) {
+          const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
+          console.log(`  ${m.memory_id}  [${m.category}] ${tag}`);
+          console.log(`    ${m.content}`);
+          console.log("");
+        }
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory search failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryList(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const filters: string[] = [];
+      const params: any[] = [];
+      if (flags.category) { filters.push("category = ?"); params.push(flags.category); }
+      if (flags.agent) { filters.push("agent = ?"); params.push(flags.agent); }
+      const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+      params.push(flags.limit);
+
+      const memories = database.prepare(
+        `SELECT * FROM memories ${where} ORDER BY updated_at DESC LIMIT ?`
+      ).all(...params) as any[];
+
+      const result = { status: "ok", count: memories.length, memories };
+      emitResult(result, flags.json, (r) => {
+        if (r.count === 0) {
+          console.log("  No memories found.");
+          return;
+        }
+        console.log("");
+        console.log(`  ${r.count} memories:`);
+        console.log("");
+        for (const m of r.memories) {
+          const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
+          console.log(`  ${m.memory_id}  [${m.category}] ${tag}  (${m.agent})`);
+          console.log(`    ${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}`);
+          console.log("");
+        }
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory list failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }

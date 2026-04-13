@@ -1,5 +1,5 @@
 import { handleInit } from "./init.js";
-import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleRisk, handleStatus, handleSearch } from "./commands.js";
+import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleRisk, handleStatus, handleSearch, handleMemory } from "./commands.js";
 import { handleRebuild } from "./rebuild.js";
 
 const HELP_TEXT = `kk — KodeKlarity code graph for AI agents
@@ -15,6 +15,7 @@ Usage:
   kk risk [--json]                           Risk score for current git changes
   kk search <term> [--json]                   Find nodes by name
   kk status [--json]                         Show graph overview
+  kk memory <subcommand> [options]           Agent memory system
   kk help                                    Show this help
 
 Examples:
@@ -46,6 +47,12 @@ const VALUE_FLAGS = new Set([
   "min-confidence",
   "build-a",
   "build-b",
+  "node",
+  "category",
+  "summary",
+  "agent",
+  "content",
+  "limit",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "enforce-confidence"]);
 
@@ -234,6 +241,7 @@ export async function runCli(argv) {
   if (command === "risk") return handleRisk([subcommand, ...rest].filter(Boolean));
   if (command === "search") return handleSearch([subcommand, ...rest].filter(Boolean));
   if (command === "status") return handleStatus([subcommand, ...rest].filter(Boolean));
+  if (command === "memory") return handleMemory([subcommand, ...rest].filter(Boolean));
 
   console.error(`Unknown command: ${command}`);
   console.log(HELP_TEXT);

@@ -33,6 +33,35 @@ kk risk                 # risk score for your uncommitted changes
 | \`kk risk\` | Before committing — scores risk 0-100 |
 | \`kk status\` | Check if graph exists and is current |
 | \`kk rebuild\` | After pulling changes or editing config |
+| \`kk memory write "..." --node <sym>\` | Save a learning/gotcha attached to a node |
+| \`kk memory read --node <sym>\` | Read memories for a symbol |
+| \`kk memory search "<query>"\` | Find memories by keyword |
+
+## Agent memory (shared knowledge across sessions)
+
+You can attach memories to graph nodes. They persist across graph rebuilds and are **auto-surfaced** when any agent queries the graph with \`kk_impact\`, \`kk_upstream\`, \`kk_downstream\`, or \`kk_side_effects\`.
+
+**Write a memory when:**
+- You discovered a non-obvious constraint or gotcha
+- You made a deliberate decision that might look like a bug to future you
+- You're mid-migration and want to flag transitional state
+- You learned something that isn't obvious from reading the code
+
+**Do NOT write memories for:**
+- Things already in commit messages
+- Re-stating what the code does
+- Trivial observations
+
+**Categories:** \`gotcha\`, \`decision\`, \`warning\`, \`context\`, \`wiki\` (global, no node)
+
+**Example:**
+\`\`\`bash
+kk memory write "Must sync Stripe before DB write — reconcileStripeState fixes mismatches" \\
+  --node updateSubscription --category gotcha \\
+  --summary "Stripe sync order matters"
+\`\`\`
+
+Pass the symbol name (not the raw node_id) — kk resolves it the same way \`kk impact\` does.
 
 ## Improving the graph
 

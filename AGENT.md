@@ -34,6 +34,12 @@ kk search <term>
 
 # Graph overview
 kk status
+
+# Agent memory — persist learnings across sessions
+kk memory write "<what you learned>" --node <symbol> --category <cat>
+kk memory read --node <symbol>
+kk memory search "<keyword>"
+kk memory list [--category <cat>]
 ```
 
 ## Demonstrating Value
@@ -335,20 +341,106 @@ Add to your MCP config:
 }
 ```
 
-### MCP Tools (10 tools)
+### MCP Tools (15 tools)
+
+**Graph tools:**
 
 | Tool | Description |
 |------|-------------|
 | `kk_init` | Full project scan and graph build |
 | `kk_rebuild` | Incremental rebuild from git diff |
-| `kk_impact` | Downstream blast radius for a symbol |
-| `kk_upstream` | Upstream callers of a symbol |
-| `kk_downstream` | What a symbol calls |
-| `kk_side_effects` | DB writes, API calls, events from a symbol |
+| `kk_impact` | Downstream blast radius for a symbol (auto-surfaces memories) |
+| `kk_upstream` | Upstream callers of a symbol (auto-surfaces memories) |
+| `kk_downstream` | What a symbol calls (auto-surfaces memories) |
+| `kk_side_effects` | DB writes, API calls, events from a symbol (auto-surfaces memories) |
 | `kk_why` | Explain connection path between two symbols |
 | `kk_risk` | Risk score from current git diff |
 | `kk_status` | Graph overview |
+| `kk_search` | Find nodes by partial name, file, or keyword |
 | `kk_config` | Read or update config values |
+| `kk_compare` | Demonstrate kk value with side-by-side comparison |
+
+**Memory tools:**
+
+| Tool | Description |
+|------|-------------|
+| `kk_memory_write` | Save a learning/gotcha/decision attached to a node or global |
+| `kk_memory_update` | Update an existing memory by memory_id |
+| `kk_memory_read` | Read memories for a symbol (or global wiki) |
+| `kk_memory_search` | Full-text search across all memories (FTS5 with prefix matching) |
+| `kk_memory_list` | Browse all memories, filter by category or agent |
+
+## Agent Memory System
+
+KodeKlarity is a **shared knowledge layer** for AI agents. You can attach memories to graph nodes that persist across sessions and surface automatically during graph queries.
+
+### When to write a memory
+
+Write a memory when you discover something that is **not obvious from the code or git history** and would help a future agent avoid a mistake or understand intent.
+
+**Good reasons to write a memory:**
+- You discovered a non-obvious constraint (partial unique index, RLS policy, race condition)
+- You made a non-obvious decision that could look like a bug to future you (`"looks redundant but removing it breaks X"`)
+- You found a gotcha while debugging (`"external API returns null on weekends"`)
+- You're in the middle of a migration (`"calls db directly, should go through ServiceLayer once PR #234 lands"`)
+- A global convention worth noting (`"repo uses optimistic updates everywhere"`)
+
+**Bad reasons (do NOT write):**
+- "Updated this function" — already in commit message
+- Re-stating what the code does — just read the code
+- Your personal reasoning about the change — that's what PRs are for
+- Things that will be obvious in 5 minutes from reading the file
+
+### Categories
+
+| Category | Use for |
+|----------|---------|
+| `gotcha` | Watch out — easy to get wrong, not obvious |
+| `decision` | Why this is done this way — don't "fix" it |
+| `warning` | Fragile, dangerous, or deprecated code |
+| `context` | General background information |
+| `wiki` | Global knowledge, not tied to a single node |
+
+### How memories surface
+
+When you call `kk_impact`, `kk_upstream`, `kk_downstream`, or `kk_side_effects`, any memories attached to nodes in the traversal are **automatically included** in the response under `memories`. You don't need to ask for them separately.
+
+```
+Agent calls: kk_impact loginAction
+Response includes:
+  - 6 downstream connections
+  - 3 memories: gotcha on loginAction, decision on withServiceContext,
+    warning on users table (because users is reachable downstream)
+```
+
+### Memory survives rebuilds
+
+`kk init` and `kk rebuild` only touch the `nodes` and `edges` tables. The `memories` table is **never deleted** by rebuilds. If a node is renamed or removed, memories become orphaned but are flagged `stale: true` when read — you can decide whether to update or delete them.
+
+### Writing memories well
+
+- **Pass the symbol name, not node_id** — kk resolves it using the same logic as `kk impact`/`kk upstream`
+- **Use `summary`** — a one-line searchable description. Content is the full detail.
+- **Include `agent`** — helps future agents know who wrote it
+- **Be specific** — "uses RLS" is useless; "RLS scoped by org_id silently filters to zero rows without withServiceContext" is valuable
+
+### Example workflow
+
+```bash
+# Claude works on billing and discovers a gotcha
+kk memory write "Stripe sync must complete before DB write — if DB succeeds and Stripe fails, use reconcileStripeState to fix" \
+  --node updateSubscription --category gotcha --agent claude \
+  --summary "Stripe sync order matters for updateSubscription"
+
+# Days later, Codex starts working on the same area
+kk impact updateSubscription
+# → gets graph connections PLUS the memory Claude wrote
+# Codex now knows not to reorder the Stripe call
+
+# A month later, a human searches
+kk memory search "stripe"
+# → finds the memory and understands the constraint
+```
 
 ## Git Integration
 
