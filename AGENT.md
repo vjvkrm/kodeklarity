@@ -1,6 +1,12 @@
 # KodeKlarity Agent Guide
 
-You are working with `kk` -- a code graph CLI that maps relationships in TypeScript projects. Use it to understand impact, trace dependencies, and make safer code changes.
+You are working with `kk` — a living code graph + memory layer for TypeScript projects. **You are expected to both USE it and IMPROVE it as you work.**
+
+- **USE** — Before every code change, query the graph and read surfaced memories.
+- **BUILD** — When the graph is missing a layer, edit `.kodeklarity/config.json` and rebuild. Permanent improvement.
+- **WRITE memory** — Selectively, only when the three-gate test passes (see Agent Memory section).
+
+Every improvement you make compounds. The next agent — even a different tool — inherits it.
 
 ## Quick Start
 
@@ -326,20 +332,23 @@ Shows graph overview: node/edge counts by kind, stack detection results, last bu
 
 KodeKlarity includes an MCP server for direct integration with AI agents.
 
-### Setup (Claude Code)
+### Setup
 
-Add to your MCP config:
+After `npm install -g kodeklarity`, the `kk-mcp` binary is on PATH. Add it to your tool's MCP config:
 
 ```json
 {
   "mcpServers": {
     "kodeklarity": {
-      "command": "npx",
-      "args": ["kodeklarity", "mcp"]
+      "command": "kk-mcp"
     }
   }
 }
 ```
+
+Location varies by tool: `.claude/settings.json` (Claude Code), your Cursor/Windsurf/Codex MCP config, etc. See the README for specifics.
+
+CLI works equivalently if you skip MCP — every MCP tool has a matching `kk <command>` form.
 
 ### MCP Tools (15 tools)
 
@@ -370,40 +379,13 @@ Add to your MCP config:
 | `kk_memory_search` | Full-text search across all memories (FTS5 with prefix matching) |
 | `kk_memory_list` | Browse all memories, filter by category or agent |
 
-## Agent Memory System
+## Agent Memory System — you build it and you use it
 
-KodeKlarity is a **shared knowledge layer** for AI agents. You can attach memories to graph nodes that persist across sessions and surface automatically during graph queries.
-
-### When to write a memory
-
-Write a memory when you discover something that is **not obvious from the code or git history** and would help a future agent avoid a mistake or understand intent.
-
-**Good reasons to write a memory:**
-- You discovered a non-obvious constraint (partial unique index, RLS policy, race condition)
-- You made a non-obvious decision that could look like a bug to future you (`"looks redundant but removing it breaks X"`)
-- You found a gotcha while debugging (`"external API returns null on weekends"`)
-- You're in the middle of a migration (`"calls db directly, should go through ServiceLayer once PR #234 lands"`)
-- A global convention worth noting (`"repo uses optimistic updates everywhere"`)
-
-**Bad reasons (do NOT write):**
-- "Updated this function" — already in commit message
-- Re-stating what the code does — just read the code
-- Your personal reasoning about the change — that's what PRs are for
-- Things that will be obvious in 5 minutes from reading the file
-
-### Categories
-
-| Category | Use for |
-|----------|---------|
-| `gotcha` | Watch out — easy to get wrong, not obvious |
-| `decision` | Why this is done this way — don't "fix" it |
-| `warning` | Fragile, dangerous, or deprecated code |
-| `context` | General background information |
-| `wiki` | Global knowledge, not tied to a single node |
+KodeKlarity is a living knowledge layer. You (the agent) are expected to both USE it and IMPROVE it as you work. Memory writes cost tokens every future session — so the bar for writing is high. The rules here are the same ones baked into the rules snippet in the README that users paste into their CLAUDE.md / AGENTS.md / .cursorrules.
 
 ### How memories surface
 
-When you call `kk_impact`, `kk_upstream`, `kk_downstream`, or `kk_side_effects`, any memories attached to nodes in the traversal are **automatically included** in the response under `memories`. You don't need to ask for them separately.
+When you call `kk_impact`, `kk_upstream`, `kk_downstream`, or `kk_side_effects`, any memories attached to nodes in the traversal are **automatically included** in the response under `memories`. You don't ask for them separately — they come for free. **Read them** before acting on the traversal results.
 
 ```
 Agent calls: kk_impact loginAction
@@ -413,33 +395,122 @@ Response includes:
     warning on users table (because users is reachable downstream)
 ```
 
+### The three-gate test for writing
+
+Only write a memory if ALL three are true:
+
+1. **Non-obvious** — a fresh agent reading the code alone would miss this
+2. **Durable** — still true next month (not "I'm mid-refactor right now")
+3. **Actionable** — the next agent will do something different because of it
+
+If any gate fails, don't write. The git commit message is enough.
+
+### Search first, update over duplicate
+
+Before writing, run `kk_memory_search "<keyword>"`. If a similar memory exists, use `kk_memory_update` to refine it instead of creating another one.
+
+### Add boundaries when the graph is missing a layer
+
+If `kk_impact` returns weak or missing connections (e.g. a server action that obviously calls service functions in the code but no service nodes show up), **the graph doesn't know about a boundary in this project**.
+
+Boundaries are the things kk tracks as nodes. Framework boundaries are detected automatically (routes, tables, jobs). Project-specific layers are not — you need to register them.
+
+**Add a boundary rule**, not a single node. A rule creates a boundary node for every matching symbol — usually dozens at once:
+
+1. Read `.kodeklarity/config.json`
+2. Add a `customBoundary` entry for the layer (services, queries, repositories, validators)
+3. Run `kk_rebuild --force`
+
+```json
+{
+  "customBoundaries": [
+    {
+      "name": "services",
+      "kind": "service",
+      "glob": "src/lib/services/*.ts",
+      "symbolPattern": "export (async )?function",
+      "reason": "Business logic layer"
+    }
+  ]
+}
+```
+
+Do NOT write a memory saying "a layer is missing" — add the boundary.
+Do NOT write a glob that matches exactly one function — that's a sign you should be matching the *layer* it lives in. If truly only one symbol matters, it's probably a framework boundary being missed — check the adapters first.
+
+The rule is permanent. Every future session inherits it.
+
+### Categories
+
+| Category | Use for | Written to |
+|----------|---------|------------|
+| `gotcha` | Watch out — easy to get wrong, not obvious | A specific node |
+| `decision` | Why this is done this way — don't "fix" it | A specific node |
+| `warning` | Fragile, dangerous, or deprecated code | A specific node |
+| `context` | General background information | A specific node |
+| `wiki` | Global convention | No node (extremely rare — see below) |
+
+### Node-level memories
+
+Worth writing (all three gates pass):
+- Hidden DB constraints invisible in schema (partial indexes, RLS, triggers, cascades)
+- Ordering that matters ("X must run before Y because Z")
+- Intentional-looking-like-a-bug ("this early return is load-bearing — removing breaks prod")
+- Known fragility with context ("external API returns null on weekends, handled by retry")
+
+NOT worth writing:
+- "Updated this function" — commit message material
+- Re-stating what the code does — read the code
+- Personal reasoning for the change — that's the PR
+- Anything obvious from 5 minutes reading the file
+
+### Global / feature-level memories (`wiki`)
+
+**Extremely rare.** Wiki memories are returned on every matching query — so every wiki memory taxes every future session. Only write one if the convention:
+
+- Applies to 10+ nodes across the repo (truly cross-cutting, not a subsystem)
+- Isn't discoverable from `package.json`, README, or the project's own CLAUDE.md / rules file
+- Would be violated by a new agent's default behavior
+
+Worth writing:
+- "Migrations must be backwards-compatible — zero-downtime deploys"
+- "Soft-delete only — never `DELETE FROM`"
+
+NOT worth writing (delete if you see these):
+- "This project uses Next.js" (package.json shows this)
+- "Follow team style guide" (vague, no action)
+- "Code is in TypeScript" (obvious)
+
+### Writing mechanics
+
+- **Pass the symbol name**, not a raw node_id. kk resolves it using the same logic as `kk_impact` / `kk_upstream`.
+- **Use the `summary` field** — a short one-liner (drives FTS search). Content is the full detail.
+- **One-line format, 80–150 chars.** Memory should be scannable in the auto-surfaced response.
+- **Include `agent`** (e.g. `claude`, `codex`) — helps future agents and humans know the source.
+
+**Good:** `"Stripe sync must complete before DB write — reconcileStripeState fixes desync"`
+**Bad:**  `"Updated updateSubscription to handle billing correctly"` (vague, obvious, commit-msg material)
+
 ### Memory survives rebuilds
 
 `kk init` and `kk rebuild` only touch the `nodes` and `edges` tables. The `memories` table is **never deleted** by rebuilds. If a node is renamed or removed, memories become orphaned but are flagged `stale: true` when read — you can decide whether to update or delete them.
 
-### Writing memories well
-
-- **Pass the symbol name, not node_id** — kk resolves it using the same logic as `kk impact`/`kk upstream`
-- **Use `summary`** — a one-line searchable description. Content is the full detail.
-- **Include `agent`** — helps future agents know who wrote it
-- **Be specific** — "uses RLS" is useless; "RLS scoped by org_id silently filters to zero rows without withServiceContext" is valuable
-
-### Example workflow
+### Example workflow (cross-session, cross-tool)
 
 ```bash
-# Claude works on billing and discovers a gotcha
-kk memory write "Stripe sync must complete before DB write — if DB succeeds and Stripe fails, use reconcileStripeState to fix" \
+# Agent 1 works on billing and discovers a gotcha (three gates all pass)
+kk memory write "Stripe sync must complete before DB write — reconcileStripeState fixes desync" \
   --node updateSubscription --category gotcha --agent claude \
-  --summary "Stripe sync order matters for updateSubscription"
+  --summary "Stripe sync order matters"
 
-# Days later, Codex starts working on the same area
+# Days later, a different agent starts working on the same area
 kk impact updateSubscription
-# → gets graph connections PLUS the memory Claude wrote
-# Codex now knows not to reorder the Stripe call
+# → gets graph connections PLUS the memory written above
+# → knows not to reorder the Stripe call
 
 # A month later, a human searches
 kk memory search "stripe"
-# → finds the memory and understands the constraint
+# → finds the memory, understands the constraint
 ```
 
 ## Git Integration

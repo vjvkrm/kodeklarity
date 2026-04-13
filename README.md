@@ -135,19 +135,52 @@ This gets you ~80–90% of your codebase's connections out of the box, in second
 
 ---
 
-## Quick Start
+## Setup — 3 steps
+
+### 1. Install
 
 ```bash
 npm install -g kodeklarity
-
-# Build the graph
-kk init
-
-# Query it
-kk impact <symbol>          # What breaks if I change this?
-kk upstream <symbol>        # What depends on this?
-kk risk                     # Risk score for my current changes
+kk init        # builds the graph for your project
 ```
+
+### 2. (Optional) Wire up the MCP server
+
+Skip this if you want your agent to use `kk` via shell commands. Add it if you want MCP tools (`kk_impact`, `kk_memory_write`, …) directly callable.
+
+```json
+{
+  "mcpServers": {
+    "kodeklarity": {
+      "command": "kk-mcp"
+    }
+  }
+}
+```
+
+Where to put it: `.claude/settings.json` (Claude Code) · your tool's MCP config file (Cursor, Windsurf, Codex, etc).
+
+### 3. Paste rules into your agent's rules file
+
+Grab the right drop-in file from **[`instructions/`](./instructions)** and paste its contents into your project's rules file. Modify freely for your project — loosen or tighten the memory-writing bar however your team prefers.
+
+| Tool | Grab this | Paste into |
+|------|-----------|-------------|
+| Claude Code | [`instructions/CLAUDE.md`](./instructions/CLAUDE.md) | `./CLAUDE.md` (or `~/.claude/CLAUDE.md` for global) |
+| Codex | [`instructions/AGENTS.md`](./instructions/AGENTS.md) | `./AGENTS.md` |
+| Cursor | [`instructions/cursorrules.md`](./instructions/cursorrules.md) | `./.cursorrules` (or `./.cursor/rules/kodeklarity.md`) |
+| Windsurf | [`instructions/windsurfrules.md`](./instructions/windsurfrules.md) | `./.windsurfrules` |
+| Any other MCP-compatible tool | any of the above | your tool's rules file |
+
+All four files have the same content — just filename and headline differ. Your agent can use **CLI** (`kk impact foo`) or **MCP** (`kk_impact`) interchangeably.
+
+**What the rules teach your agent:**
+
+- **USE** the graph before every change — check impact, read surfaced memories
+- **BUILD** the graph when layers are missing — add `customBoundary` rules to `.kodeklarity/config.json`
+- **WRITE memory** selectively using the three-gate test (non-obvious + durable + actionable) to keep token cost low
+
+---
 
 ## Commands
 
@@ -183,92 +216,11 @@ Add `--json` to any command for machine-readable output. Add `--depth N` to cont
 
 Memories survive every `kk init` / `kk rebuild`. Full-text searchable (SQLite FTS5 with prefix matching). Auto-surface in `kk_impact` / `kk_upstream` / `kk_downstream` / `kk_side_effects`. Orphaned memories flagged `stale: true` when the node is deleted.
 
-## MCP Server
+## MCP tools (15)
 
-15 tools for AI agents:
+**Graph:** `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`, `kk_search`, `kk_compare`
 
-**Graph queries:** `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`, `kk_search`, `kk_compare`
-
-**Agent memory:** `kk_memory_write`, `kk_memory_update`, `kk_memory_read`, `kk_memory_search`, `kk_memory_list`
-
-### Claude Code
-
-Add to `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "kodeklarity": {
-      "command": "kk-mcp"
-    }
-  }
-}
-```
-
-### Cursor / Windsurf / Other MCP Clients
-
-```json
-{
-  "mcpServers": {
-    "kodeklarity": {
-      "command": "node",
-      "args": ["/path/to/kodeklarity/dist/bin/kk-mcp.js"]
-    }
-  }
-}
-```
-
----
-
-## Tell Your Agent to Use It
-
-Installing the MCP server exposes the tools, but your agent won't know **when** to use them. Drop this snippet into your agent's rules file:
-
-- **Claude Code** → `CLAUDE.md` (project root) or `~/.claude/CLAUDE.md` (global)
-- **Codex** → `AGENTS.md` (project root)
-- **Cursor** → `.cursor/rules/kodeklarity.md` or `.cursorrules`
-- **Windsurf** → `.windsurfrules`
-
-```markdown
-## KodeKlarity — you build it and you use it
-
-This project has a living code graph + memory layer via `kk` (MCP server: `kodeklarity`).
-**You (the agent) are expected to both USE it and IMPROVE it as you work.**
-
-### Use it — before every change
-
-- `kk_impact <symbol>` — see downstream blast radius
-- `kk_upstream <symbol>` — find all callers
-- Read any `memories` returned in the response — past agents left gotchas,
-  decisions, and warnings you must respect
-- `kk_risk` before committing — scores the diff 0–100
-
-### Build it — improve the graph when you spot gaps
-
-- If `kk_impact` returns weak or missing connections (e.g. a server action
-  that obviously touches a table but no path is shown), the graph is missing
-  a layer
-- Read `.kodeklarity/config.json`, add a `customBoundary` for the missing
-  layer (services, queries, repositories, validators — whatever this project has)
-- Call `kk_rebuild --force` to apply. The improvement is permanent — every
-  future session inherits it.
-
-### Write memory — capture what you learn
-
-Call `kk_memory_write` with category `gotcha` / `decision` / `warning` / `wiki`
-when you discover something non-obvious:
-
-- Hidden constraints (partial indexes, RLS, foreign key cascades)
-- Deliberate non-obvious choices ("looks redundant but removing it breaks X")
-- Known fragility ("external API flakes on weekends, handled by retry logic")
-- Mid-migration state ("this path will move to ServiceLayer once PR #234 lands")
-
-Do NOT write memories for things already in commit messages or obvious from
-the code. Pass the `symbol` name (not a raw node_id) and include a short
-`summary` for full-text search.
-```
-
-That's it. After this, the agent queries the graph before making changes, respects memories from past sessions, and writes new memories when it learns something non-obvious.
+**Memory:** `kk_memory_write`, `kk_memory_update`, `kk_memory_read`, `kk_memory_search`, `kk_memory_list`
 
 ---
 
