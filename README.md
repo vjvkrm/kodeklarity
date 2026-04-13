@@ -2,15 +2,15 @@
 
 # 🧠 KodeKlarity
 
-### Shared knowledge & memory of your code, for AI agents.
+### A living knowledge layer for your codebase — built by your AI agents, used by your AI agents.
 
-*The code graph + persistent memory layer that makes any coding agent actually understand your codebase —<br>and remember what it learned for the next session.*
+*Code graph + persistent memory. Agents shape it when they spot gaps, write to it when they learn.<br>Every session, it understands your codebase better than the last.*
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white)](#)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6)](#)
 [![Zero LLM](https://img.shields.io/badge/Zero_LLM-pure_static_analysis-22C55E)](#)
 [![Memory](https://img.shields.io/badge/Agent_Memory-persistent-F59E0B)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-yellow.svg)](./LICENSE)
 
 </div>
 
@@ -20,13 +20,20 @@
 
 ## Every coding agent starts from zero. That's the problem.
 
-Your coding agent figures out your billing flow, discovers a gotcha about Stripe ordering, ships a fix. Next session, it has no memory. Switch tools and the new one starts from scratch. Every session, every agent, rediscovers the same things — and guesses based on grep, missing the indirect connections that break production.
+Your coding agent figures out your billing flow, discovers a gotcha about Stripe ordering, ships a fix. Next session, it has no memory. Switch tools — the new one starts from scratch. Every session, every agent, rediscovers the same things — and guesses based on grep, missing the indirect connections that break production.
 
-**KodeKlarity is the shared brain that fixes this.**
+**KodeKlarity is the shared knowledge layer your agents build and use.**
 
-One persistent knowledge layer that every coding agent reads and writes. It maps your whole codebase automatically (symbol-level accuracy, not grep), and it accumulates what your agents learn — gotchas, decisions, warnings — attached to the exact functions and tables they apply to. The next agent picks up where the last one left off.
+One persistent brain that every coding agent reads *and writes*. The graph maps your whole codebase automatically (symbol-level accuracy, not grep). Memory captures what agents learn — gotchas, decisions, warnings — attached to the exact functions and tables they apply to.
 
-Zero LLM tokens. Zero guessing. Every session, smarter about *your* codebase.
+And here's the twist: **agents maintain it themselves.**
+
+- When an agent spots a missing layer in the graph (your service layer isn't being traced), it edits `.kodeklarity/config.json` to add a `customBoundary`, rebuilds, and the graph permanently improves. Every future session inherits it.
+- When an agent discovers something non-obvious, it writes a memory tied to the relevant node. The next agent sees it automatically during impact analysis.
+
+You don't configure kk. You don't train it. Your agents shape it as they work — and every session benefits from every session before it.
+
+Zero LLM tokens. Zero guessing. Knowledge compounds.
 
 <br>
 
@@ -72,6 +79,7 @@ One query returns the full map *plus* every relevant thing past agents learned. 
 | 🧠 **Learning across sessions** | Every session starts fresh. Same gotchas rediscovered. Same mistakes repeated. | Memories persist and auto-surface at the right moment. |
 | 🔀 **Cross-tool knowledge** | Each tool has its own memory silo | One shared brain across every coding agent — MCP-compatible out of the box. |
 | 💥 **Accuracy** | Agent guesses impact from pattern matching | Exact downstream traversal with confidence scores. |
+| 🌱 **Maintenance** | You configure rules, docs, context files manually | Agents add missing layers to config and write memories as they work. Zero human config. |
 | 💰 **Cost** | Rediscovery burns tokens every session | Static analysis + persistent memory. Zero LLM tokens. |
 | 😴 **Risk before commit** | Hope the tests catch it | `kk risk` scores your diff 0–100 from actual graph impact. |
 
@@ -82,6 +90,8 @@ One query returns the full map *plus* every relevant thing past agents learned. 
 <br>
 
 ## Built for real workflows
+
+🌱 **Self-improving, zero-config** — Agents spot missing layers, add them to config, and rebuild. Agents discover gotchas, write them as memories. You never edit a rules file.
 
 🎮 **Vibe coding, safely** — Move fast, let KodeKlarity watch your back. Your agent sees the map, respects past decisions, scores your risk before commit.
 
@@ -103,15 +113,23 @@ One query returns the full map *plus* every relevant thing past agents learned. 
 
 ## How it works
 
-**Pure static analysis. No LLM. Framework-aware.**
+**Pure static analysis. No LLM. Framework-aware. Agent-maintained.**
 
-1. **Discovers boundaries automatically** — Detects Next.js, Drizzle, NestJS, Express, Trigger.dev from `package.json`. Knows `'use server'` is a mutation boundary, `pgTable()` is a data boundary, `task()` is an async boundary.
+### The baseline — automatic
+
+1. **Discovers boundaries** — Detects Next.js, Drizzle, NestJS, Express, Trigger.dev from `package.json`. Knows `'use server'` is a mutation boundary, `pgTable()` is a data boundary, `task()` is an async boundary.
 
 2. **Traces with the TypeScript compiler** — Uses `ts.createProgram` (the real type checker) to resolve calls through generics, aliases, barrel re-exports, and monorepo imports. Symbol-level precision.
 
-3. **Accumulates memory** — Agents write learnings via `kk_memory_write`. Tied to graph nodes. Full-text searchable. Surfaces automatically when any agent queries impact/upstream/downstream.
+This gets you ~80–90% of your codebase's connections out of the box, in seconds.
 
-4. **Improves over time** — Config auto-updates as agents teach it about project-specific patterns. Memories build up. Each session is smarter than the last.
+### The living part — agents fill the gaps
+
+3. **Agents teach the graph** — Missing a service layer? An agent edits `.kodeklarity/config.json` to add a `customBoundary`, runs `kk rebuild`, and the layer is now permanently mapped. Same for query layers, validators, repository patterns — anything project-specific.
+
+4. **Agents write memory** — Discovered a gotcha? `kk_memory_write` stores it against the node. Discovered an intentional non-obvious decision? Same. Next agent calling `kk_impact` on that node gets the memory back automatically.
+
+5. **It compounds** — Config and memory both live in `.kodeklarity/` and survive rebuilds. Commit the directory to share improvements across your team, or keep it local. Either way, your future self inherits every past agent's understanding.
 
 **Tested on production monorepos:** 750+ nodes · 43,000+ connections · 5 seconds · 0 LLM tokens.
 
@@ -212,34 +230,42 @@ Installing the MCP server exposes the tools, but your agent won't know **when** 
 - **Windsurf** → `.windsurfrules`
 
 ```markdown
-## KodeKlarity (code graph + agent memory)
+## KodeKlarity — you build it and you use it
 
-This project has a code graph via `kk` (MCP server: `kodeklarity`).
+This project has a living code graph + memory layer via `kk` (MCP server: `kodeklarity`).
+**You (the agent) are expected to both USE it and IMPROVE it as you work.**
 
-**Before modifying any function, route, or table:**
-- Call `kk_impact <symbol>` to see downstream blast radius
-- Call `kk_upstream <symbol>` to find all callers
-- Review any `memories` returned in the response — they contain gotchas and
-  decisions from past sessions that you must respect
+### Use it — before every change
 
-**Before committing:**
-- Call `kk_risk` to score the diff (0-100)
+- `kk_impact <symbol>` — see downstream blast radius
+- `kk_upstream <symbol>` — find all callers
+- Read any `memories` returned in the response — past agents left gotchas,
+  decisions, and warnings you must respect
+- `kk_risk` before committing — scores the diff 0–100
 
-**When you learn something non-obvious:**
-- Call `kk_memory_write` with a `gotcha`, `decision`, or `warning` category
-- Pass the `symbol` name (same format as `kk_impact`), not a raw node_id
-- Include a short `summary` for full-text search
-- Write memories for: hidden constraints, deliberate non-obvious choices,
-  known fragility, mid-migration state — NOT for things already in commit
-  messages or obvious from reading the code
+### Build it — improve the graph when you spot gaps
 
-**If the graph is stale:**
-- Call `kk_rebuild` (skips if no changes; fast incremental diff)
+- If `kk_impact` returns weak or missing connections (e.g. a server action
+  that obviously touches a table but no path is shown), the graph is missing
+  a layer
+- Read `.kodeklarity/config.json`, add a `customBoundary` for the missing
+  layer (services, queries, repositories, validators — whatever this project has)
+- Call `kk_rebuild --force` to apply. The improvement is permanent — every
+  future session inherits it.
 
-**If a symbol isn't found:**
-- Call `kk_search <term>` to find similar node names
-- If a whole layer is missing (services, queries), edit
-  `.kodeklarity/config.json` to add `customBoundaries`, then `kk_rebuild --force`
+### Write memory — capture what you learn
+
+Call `kk_memory_write` with category `gotcha` / `decision` / `warning` / `wiki`
+when you discover something non-obvious:
+
+- Hidden constraints (partial indexes, RLS, foreign key cascades)
+- Deliberate non-obvious choices ("looks redundant but removing it breaks X")
+- Known fragility ("external API flakes on weekends, handled by retry logic")
+- Mid-migration state ("this path will move to ServiceLayer once PR #234 lands")
+
+Do NOT write memories for things already in commit messages or obvious from
+the code. Pass the `symbol` name (not a raw node_id) and include a short
+`summary` for full-text search.
 ```
 
 That's it. After this, the agent queries the graph before making changes, respects memories from past sessions, and writes new memories when it learns something non-obvious.

@@ -1,12 +1,45 @@
 {
   "name": "kodeklarity",
   "version": "0.1.0",
-  "description": "Whole-project code graph for AI agents — impact analysis, risk scoring, cross-boundary tracing",
+  "description": "Shared knowledge & memory of your code, for AI agents. Code graph + persistent memory layer — impact analysis, risk scoring, cross-boundary tracing, agent-to-agent knowledge sharing.",
   "type": "module",
+  "author": "Vijay Singh <129295991+vjvkrm@users.noreply.github.com>",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/vjvkrm/kodeklarity#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vjvkrm/kodeklarity.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vjvkrm/kodeklarity/issues"
+  },
+  "keywords": [
+    "code-graph",
+    "impact-analysis",
+    "risk-scoring",
+    "ai-agents",
+    "mcp",
+    "mcp-server",
+    "claude",
+    "codex",
+    "cursor",
+    "typescript",
+    "static-analysis",
+    "nextjs",
+    "drizzle",
+    "agent-memory",
+    "code-understanding"
+  ],
   "bin": {
     "kk": "dist/bin/kk.js",
     "kk-mcp": "dist/bin/kk-mcp.js"
   },
+  "files": [
+    "dist/**/*.js",
+    "README.md",
+    "AGENT.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc && chmod +x dist/bin/kk.js dist/bin/kk-mcp.js",
     "start": "node ./dist/bin/kk.js",
@@ -16,7 +49,11 @@
     "test:discover": "npm run build && node --test ./tests/discover.test.js",
     "test:config": "npm run build && node --test ./tests/config.test.js",
     "test:e2e": "npm run build && node --test ./tests/e2e.test.js",
-    "test:legacy": "node --test ./tests/integration.cli.test.js"
+    "test:legacy": "node --test ./tests/integration.cli.test.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

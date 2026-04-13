@@ -7,7 +7,9 @@ import { execSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(__dirname, "fixtures", "nextjs-drizzle-app");
-const KK_BIN = path.join(__dirname, "..", "bin", "kk.js");
+// Use the built bin — matches what users install via npm.
+// npm test runs `npm run build` first, so dist/ is guaranteed fresh.
+const KK_BIN = path.join(__dirname, "..", "dist", "bin", "kk.js");
 
 function kk(args, cwd = FIXTURE_PATH) {
   try {

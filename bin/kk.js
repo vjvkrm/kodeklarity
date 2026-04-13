@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 
-// Try dist first (compiled TS), fall back to src (pure JS legacy commands)
-let runCli;
-try {
-  const mod = await import("../dist/src/cli.js");
-  runCli = mod.runCli;
-} catch {
-  const mod = await import("../src/cli.js");
-  runCli = mod.runCli;
-}
+// When published, this file lives at dist/bin/kk.js and imports
+// from dist/src/cli.js — the relative path ../src/cli.js resolves correctly
+// in both the installed package layout and the local repo (since `npm run build`
+// copies this file into dist/bin/).
+import { runCli } from "../src/cli.js";
 
 runCli(process.argv.slice(2))
   .then((code) => {
