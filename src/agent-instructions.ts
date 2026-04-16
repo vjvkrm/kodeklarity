@@ -3,147 +3,28 @@ import path from "node:path";
 
 const INSTRUCTIONS_FILE = ".kodeklarity/AGENT.md";
 
-const AGENT_INSTRUCTIONS = `# KodeKlarity — you build it and you use it
+const AGENT_INSTRUCTIONS = `# KodeKlarity (\`kk\`) — use it, improve it
 
-This project has a living code graph + memory layer via \`kk\` (MCP server: \`kodeklarity\`).
-**You are expected to both USE it and IMPROVE it as you work.**
+Graph + memory layer. CLI or MCP (identical). Installed as devDependency (\`kodeklarity\`).
 
----
+**When starting work or after pulling new code:**
+- \`kk_rebuild\` — update the graph to match current code
+- \`kk_impact <symbol>\` / \`kk_upstream <symbol>\` / \`kk_side_effects <symbol>\` — understand what you're about to touch (read the \`memories\` field!)
+- If \`kk_impact\` shows missing connections (e.g., server action calls a service but no service nodes appear), add a \`customBoundary\` rule in \`.kodeklarity/config.json\` matching the whole layer (not one symbol), then \`kk_rebuild --force\`
+- \`kk_risk\` on your diff — if >70, explain affected systems before proceeding
 
-## Use it — before every code change
+**Before every commit (mandatory):**
+- \`kk_precommit\` — catches orphaned services, unwired code paths, missing table access, breaking changes, and missing tests. Fix all issues it reports before committing. If \`orphans\` are intentional (e.g., new service not wired yet), explain in the commit message.
 
-| Call | Why |
-|------|-----|
-| \`kk_impact <symbol>\` | See downstream blast radius. **Read the \`memories\` field** — past agents flagged things you need to know. |
-| \`kk_upstream <symbol>\` | Find all callers before changing a shared function |
-| \`kk_side_effects <symbol>\` | See reachable DB writes, API calls, jobs |
-| \`kk_risk\` | Before committing — 0–100 risk score for your diff |
+**Memory discipline:**
+- When you change a function's behavior, check \`kk_memory_read <symbol>\` — if there's a stale memory, update or remove it via \`kk_memory_update\`.
+- When you make a non-obvious decision (why X, not Y), write a memory: \`kk_memory_write\` with category \`decision\` or \`gotcha\`.
+- Write only if all three hold: (1) non-obvious from code, (2) durable (true next month), (3) actionable (next agent behaves differently).
+- Search first (\`kk_memory_search\`); prefer \`kk_memory_update\` over duplicates.
+- Categories: \`gotcha\`, \`decision\`, \`warning\`, \`wiki\` (rare). Worth writing: hidden DB constraints, load-bearing ordering, intentional-looking-like-bug. Not worth: "fixed X", restating code.
+- Remove stale memories — if a memory references a deleted function or changed behavior, delete it. Code and memory must stay consistent.
 
-Pass the **symbol name** (\`updateUser\`, \`users\`) — kk resolves it like \`kk impact\` does.
-
----
-
-## Build it — add boundaries when the graph is missing a layer
-
-If \`kk_impact\` shows an obvious code call but no graph edge (e.g. a server
-action that clearly calls service functions but no service nodes appear),
-**the graph doesn't know about a boundary** in this project.
-
-Boundaries are what kk tracks as nodes. Framework boundaries (routes, tables,
-jobs) are detected automatically. Project-specific layers (services, queries,
-repositories, validators) need to be registered.
-
-**Add a boundary rule** — not a single node. The rule creates a boundary node
-for every matching symbol in the layer (usually dozens at once, permanently).
-
-1. Read \`.kodeklarity/config.json\`
-2. Add a \`customBoundary\` entry for the layer
-3. Run \`kk_rebuild --force\`
-
-\`\`\`json
-{
-  "customBoundaries": [
-    {
-      "name": "services",
-      "kind": "service",
-      "glob": "src/lib/services/*.ts",
-      "symbolPattern": "export (async )?function",
-      "reason": "Business logic layer"
-    }
-  ]
-}
-\`\`\`
-
-Do NOT write a memory saying "a layer is missing" — add the boundary.
-Do NOT write a glob that matches only one function — match the layer it lives in.
-
----
-
-## Write memory — capture what you learn (selectively)
-
-Memory costs tokens every future session — so the bar is high.
-
-### The three-gate test
-
-Only write a memory if ALL three are true:
-
-1. **Non-obvious** — a fresh agent reading the code alone would miss this
-2. **Durable** — still true next month, not "I'm mid-refactor right now"
-3. **Actionable** — the next agent will do something different because of it
-
-If any gate fails, don't write. The git commit message is enough.
-
-### Search first to avoid duplicates
-
-Run \`kk_memory_search "<keyword>"\` before writing. If a similar memory exists,
-use \`kk_memory_update\` instead of creating another one.
-
-### Node-level memories (attached to a symbol)
-
-Categories: \`gotcha\` (watch out) · \`decision\` (why it's done this way) · \`warning\` (fragile/dangerous)
-
-Worth writing:
-- Hidden DB constraints invisible in schema (partial indexes, RLS, triggers, cascades)
-- Ordering that matters (\"X must run before Y because Z\")
-- Intentional-looking-like-a-bug (\"this early return is load-bearing — removing breaks prod\")
-- Known fragility with context (\"external API returns null on weekends, handled by retry\")
-
-Format: **ONE line, 80–150 chars**. Always include \`summary\` (shorter, drives FTS search).
-
-**Good:** \`\"Stripe sync must complete before DB write — reconcileStripeState fixes desync\"\`
-**Bad:**  \`\"Updated updateSubscription to handle billing correctly\"\` (vague, obvious, commit-msg material)
-
-### Global / feature-level memories (category \`wiki\`, no \`symbol\`)
-
-**Extremely rare.** These are returned on every matching query, so every wiki memory
-taxes every future session. Only write if the convention:
-- Applies to 10+ nodes across the repo (truly cross-cutting)
-- Isn't discoverable from package.json, README, or CLAUDE.md
-- Would be violated by a new agent's default behavior
-
-Worth writing:
-- \"Migrations must be backwards-compatible — zero-downtime deploys\"
-- \"Soft-delete only — never \\\`DELETE FROM\\\`\"
-
-NOT worth writing (delete if you see these):
-- \"This project uses Next.js\" (package.json shows this)
-- \"Follow team style guide\" (vague, no action)
-- \"Code is in TypeScript\" (obvious)
-
----
-
-## Examples
-
-Good memory:
-\`\`\`
-kk_memory_write
-  symbol: updateSubscription
-  content: \"Must sync Stripe before DB write — reconcileStripeState fixes desync\"
-  summary: \"Stripe sync order matters\"
-  category: gotcha
-\`\`\`
-
-Updating instead of duplicating:
-\`\`\`
-1. kk_memory_search \"stripe\"
-2. Found mem-abc123 — close but out of date
-3. kk_memory_update mem-abc123 with sharper content
-\`\`\`
-
----
-
-## Comparing with/without kk
-
-If the user asks whether kk helps, use the \`kk_compare\` MCP tool to run a live
-side-by-side comparison on this project.
-
-## Reporting bugs
-
-If a query returns wrong results (0 when data exists, or clearly too many), check existing issues:
-\`\`\`
-gh search issues --repo vjvkrm/kodeklarity \"<short description>\"
-\`\`\`
-If no match, file a new issue with graph context from \`kk_status\`.
+**Full reference:** See https://github.com/vjvkrm/kodeklarity/blob/main/AGENT.md for all commands, config options, graph model, memory system details, and first-run playbook.
 `;
 
 /**

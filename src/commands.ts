@@ -529,6 +529,91 @@ export async function handleSearch(args: string[]): Promise<number> {
   }
 }
 
+// --- Precommit command ---
+
+export async function handlePrecommit(args: string[]): Promise<number> {
+  const flags = parseCommandFlags(args);
+
+  try {
+    const { reviewGraph } = await import("./review-graph.js");
+    const result = await reviewGraph(process.cwd());
+
+    emitResult(result, flags.json, (r) => {
+      if (r.message && r.stats.total_changed_files === 0) {
+        console.log(`  ${r.message}`);
+        return;
+      }
+
+      console.log("");
+      console.log(`  Changed files: ${r.stats.total_changed_files}`);
+      console.log("");
+
+      // New symbols
+      if (r.new_symbols.length > 0) {
+        console.log("  new_symbols:");
+        for (const s of r.new_symbols) {
+          console.log(`    ${s.symbol} (${s.kind}) — ${s.file}:${s.line}`);
+        }
+        console.log("");
+      }
+
+      // New edges
+      if (r.new_edges.length > 0) {
+        console.log("  new_edges:");
+        for (const e of r.new_edges) {
+          console.log(`    ${e.from_symbol} → ${e.to_symbol} (${e.edge_type})`);
+        }
+        console.log("");
+      }
+
+      // Orphans
+      if (r.orphans.length > 0) {
+        console.log("  orphans:");
+        for (const o of r.orphans) {
+          console.log(`    \u26A0 ${o.symbol} (${o.kind}) — not called from any existing code path`);
+          if (o.suggestion) console.log(`      \u2192 ${o.suggestion}`);
+        }
+        console.log("");
+      }
+
+      // Tables touched
+      if (r.tables_touched.writes.length > 0 || r.tables_touched.reads.length > 0) {
+        console.log("  tables_touched:");
+        if (r.tables_touched.writes.length > 0) {
+          console.log(`    WRITES: ${r.tables_touched.writes.join(", ")}`);
+        }
+        if (r.tables_touched.reads.length > 0) {
+          console.log(`    READS:  ${r.tables_touched.reads.join(", ")}`);
+        }
+        console.log("");
+      }
+
+      // Breaking changes
+      if (r.breaking_changes.length > 0) {
+        console.log("  breaking_changes:");
+        for (const b of r.breaking_changes) {
+          console.log(`    ${b.symbol} (${b.kind}) — ${b.note}`);
+        }
+        console.log("");
+      }
+
+      // Missing coverage
+      if (r.missing_coverage.length > 0) {
+        console.log("  missing_coverage:");
+        for (const m of r.missing_coverage) {
+          console.log(`    ? ${m}`);
+        }
+        console.log("");
+      }
+    });
+
+    return 0;
+  } catch (err) {
+    console.error(`Precommit analysis failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
 // --- Memory commands ---
 
 interface MemoryFlags {

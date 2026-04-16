@@ -425,6 +425,20 @@ Run this first time you open a project, or after significant code changes. Use f
     }
   );
 
+  // --- kk_precommit ---
+  server.tool(
+    "kk_precommit",
+    `Pre-commit impact analysis. Reads uncommitted changes (staged + unstaged + untracked), runs discovery and tracing on the working tree, and diffs against the committed graph. Reports: new symbols, new edges, orphans (new code nobody calls yet), tables touched (reads/writes), breaking changes (modified symbols with downstream dependents), and missing coverage. Nothing is persisted — this is a read-only analysis of your working tree.
+
+Use BEFORE committing to catch architecture gaps: orphaned services, unwired code paths, missing table access patterns. Complements kk_risk (which only scores existing graph nodes) by also discovering brand-new code that the committed graph can't see.`,
+    {},
+    async () => {
+      const { reviewGraph } = await import("./review-graph.js");
+      const result = await reviewGraph(process.cwd());
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+  );
+
   // --- kk_status ---
   server.tool(
     "kk_status",

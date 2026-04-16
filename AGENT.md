@@ -32,6 +32,9 @@ kk side-effects <symbol>
 # How are these connected?
 kk why --from <symbol> --to <symbol>
 
+# Pre-commit analysis — run BEFORE every commit
+kk precommit
+
 # Risk score for current uncommitted changes (zero-arg)
 kk risk
 
@@ -43,6 +46,7 @@ kk status
 
 # Agent memory — persist learnings across sessions
 kk memory write "<what you learned>" --node <symbol> --category <cat>
+kk memory update <memory_id> --content "<updated content>"
 kk memory read --node <symbol>
 kk memory search "<keyword>"
 kk memory list [--category <cat>]
@@ -304,11 +308,27 @@ Explains the shortest path between two symbols in the graph.
 
 **Use when:** Need to understand how two seemingly unrelated pieces of code are connected.
 
+### `kk precommit [--json]`
+
+Pre-commit impact analysis. Reads uncommitted changes (staged + unstaged + untracked), runs discovery and tracing on the working tree, and diffs against the committed graph. Nothing is persisted.
+
+**Reports:**
+- `new_symbols` — boundary nodes you added
+- `new_edges` — new connections from your code
+- `orphans` — new code nobody calls yet (wire them before committing)
+- `tables_touched` — which tables your changes read/write (split by READS/WRITES)
+- `breaking_changes` — modified symbols with downstream dependents
+- `missing_coverage` — files with no boundary nodes, symbols with no tests
+
+**Use when:** Before every commit. Catches architecture gaps that code review misses: orphaned services, unwired code paths, missing table access patterns.
+
+**Important:** If orphans are found, wire them before committing. If breaking_changes are flagged, check the downstream callers.
+
 ### `kk risk [--json]`
 
 Zero-arg command. Reads `git diff` of uncommitted changes and computes a risk score (0-100) based on downstream impact, side-effect reach, and graph coverage.
 
-**Use when:** Reviewing a PR or before committing to assess change risk.
+**Use when:** Quick risk check. For deeper pre-commit analysis, use `kk precommit` instead.
 
 ### `kk search <term> [--json]`
 
@@ -363,6 +383,7 @@ CLI works equivalently if you skip MCP — every MCP tool has a matching `kk <co
 | `kk_downstream` | What a symbol calls (auto-surfaces memories) |
 | `kk_side_effects` | DB writes, API calls, events from a symbol (auto-surfaces memories) |
 | `kk_why` | Explain connection path between two symbols |
+| `kk_precommit` | Pre-commit impact analysis (orphans, new symbols, tables, breaking changes) |
 | `kk_risk` | Risk score from current git diff |
 | `kk_status` | Graph overview |
 | `kk_search` | Find nodes by partial name, file, or keyword |
@@ -491,6 +512,19 @@ NOT worth writing (delete if you see these):
 **Good:** `"Stripe sync must complete before DB write — reconcileStripeState fixes desync"`
 **Bad:**  `"Updated updateSubscription to handle billing correctly"` (vague, obvious, commit-msg material)
 
+### Maintaining memories — keep them consistent with code
+
+When you change code that has attached memories, **you must maintain those memories**:
+
+1. **Before changing a symbol**, run `kk impact <symbol>` or `kk_impact` — read the surfaced memories. Respect any gotchas, decisions, or warnings flagged by past agents.
+2. **After changing behavior**, check if existing memories are still true:
+   - Memory is now **wrong** (behavior changed) → `kk memory update <memory_id> --content "updated truth"`
+   - Memory is now **irrelevant** (code removed/refactored away) → delete it
+   - You discovered something new that passes the three-gate test → write a new memory
+3. **Search first** — `kk memory search "<keyword>"`. Update existing memories instead of creating duplicates.
+
+**Stale memories are worse than no memories.** They mislead the next agent into making wrong assumptions. Every time you change a symbol's behavior, check and update its attached memories.
+
 ### Memory survives rebuilds
 
 `kk init` and `kk rebuild` only touch the `nodes` and `edges` tables. The `memories` table is **never deleted** by rebuilds. If a node is renamed or removed, memories become orphaned but are flagged `stale: true` when read — you can decide whether to update or delete them.
@@ -527,8 +561,11 @@ Typical workflow:
 ```bash
 git pull                # fetch changes
 kk rebuild              # update graph incrementally
-kk risk                 # check risk of your local changes
-kk impact <symbol>      # investigate specific change impact
+kk impact <symbol>      # investigate before changing (read surfaced memories!)
+# ... make your changes ...
+kk precommit            # pre-commit analysis (orphans, breaking changes, tables)
+# ... fix any orphans or issues found ...
+git commit              # commit with confidence
 ```
 
 ## Config: `.kodeklarity/config.json`
