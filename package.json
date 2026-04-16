@@ -1,6 +1,6 @@
 {
   "name": "kodeklarity",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared knowledge & memory of your code, for AI agents. Code graph + persistent memory layer — impact analysis, risk scoring, cross-boundary tracing, agent-to-agent knowledge sharing.",
   "type": "module",
   "author": "Vijay Singh <129295991+vjvkrm@users.noreply.github.com>",

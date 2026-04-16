@@ -81,7 +81,7 @@ One query returns the full map *plus* every relevant thing past agents learned. 
 | 💥 **Accuracy** | Agent guesses impact from pattern matching | Exact downstream traversal with confidence scores. |
 | 🌱 **Maintenance** | You configure rules, docs, context files manually | Agents add missing layers to config and write memories as they work. Zero human config. |
 | 💰 **Cost** | Rediscovery burns tokens every session | Static analysis + persistent memory. Zero LLM tokens. |
-| 😴 **Risk before commit** | Hope the tests catch it | `kk risk` scores your diff 0–100 from actual graph impact. |
+| 😴 **Risk before commit** | Hope the tests catch it | `kk precommit` catches orphans, unwired code, breaking changes. `kk risk` scores 0–100 from graph impact. |
 
 <br>
 
@@ -177,8 +177,9 @@ All four files have the same content — just filename and headline differ. Your
 **What the rules teach your agent:**
 
 - **USE** the graph before every change — check impact, read surfaced memories
+- **PRECOMMIT** before every commit — catch orphans, breaking changes, missing tests
 - **BUILD** the graph when layers are missing — add `customBoundary` rules to `.kodeklarity/config.json`
-- **WRITE memory** selectively using the three-gate test (non-obvious + durable + actionable) to keep token cost low
+- **WRITE memory** selectively (non-obvious + durable + actionable) and maintain existing memories when code changes
 
 ---
 
@@ -193,6 +194,7 @@ All four files have the same content — just filename and headline differ. Your
 | `kk downstream <symbol>` | What this calls |
 | `kk side-effects <symbol>` | DB writes, API calls, events triggered |
 | `kk why --from X --to Y` | Explain how two symbols connect |
+| `kk precommit` | Pre-commit analysis: orphans, new symbols, tables touched, breaking changes |
 | `kk risk` | Risk score (0-100) for uncommitted changes |
 | `kk search <term>` | Find nodes by name, file, or keyword |
 | `kk status` | Graph overview |
@@ -216,9 +218,9 @@ Add `--json` to any command for machine-readable output. Add `--depth N` to cont
 
 Memories survive every `kk init` / `kk rebuild`. Full-text searchable (SQLite FTS5 with prefix matching). Auto-surface in `kk_impact` / `kk_upstream` / `kk_downstream` / `kk_side_effects`. Orphaned memories flagged `stale: true` when the node is deleted.
 
-## MCP tools (15)
+## MCP tools (16)
 
-**Graph:** `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_status`, `kk_config`, `kk_search`, `kk_compare`
+**Graph:** `kk_init`, `kk_rebuild`, `kk_impact`, `kk_upstream`, `kk_downstream`, `kk_side_effects`, `kk_why`, `kk_risk`, `kk_precommit`, `kk_status`, `kk_config`, `kk_search`, `kk_compare`
 
 **Memory:** `kk_memory_write`, `kk_memory_update`, `kk_memory_read`, `kk_memory_search`, `kk_memory_list`
 
@@ -402,6 +404,7 @@ src/
   config.ts                  Agent-editable config system
   init.ts                    kk init orchestration
   rebuild.ts                 Incremental rebuild
+  review-graph.ts            Pre-commit analysis (kk precommit)
   git.ts                     Git state, diff, branch tracking
   trace.ts                   File-level import chain traversal
   type-tracer.ts             Type-aware tracing via ts.createProgram
