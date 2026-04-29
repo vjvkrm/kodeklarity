@@ -1,5 +1,6 @@
 node_modules/
 .kodeklarity/
+.claude/
 dist/
 .DS_Store
 README-TRACKING.md
