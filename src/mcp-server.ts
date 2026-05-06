@@ -8,7 +8,7 @@ import { storeDiscoveryResult } from "./store.js";
 import { traceImportEdges } from "./trace.js";
 import { traceWithTypeChecker } from "./type-tracer.js";
 import { loadConfig, saveConfig, generateDefaultConfig, mergeConfig, validateConfig } from "./config.js";
-import { getGitState, getWorkingChanges } from "./git.js";
+import { getGitState } from "./git.js";
 import { compactifyTraversal, compactifyRisk, compactifyStatus, summarizeTraversal } from "./compact.js";
 import { fetchMemoriesForTraversal } from "./memory-helpers.js";
 
@@ -302,124 +302,12 @@ Run this first time you open a project, or after significant code changes. Use f
     }
   );
 
-  // --- kk_risk ---
-  server.tool(
-    "kk_risk",
-    `Assess risk of current uncommitted changes. Reads git diff (unstaged + staged + untracked), finds which graph nodes are affected, traces downstream impact, and returns a risk score (0-100) with breakdown by node type and side effects.`,
-    {},
-    async () => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const workingChanges = getWorkingChanges(cwd);
-      const changedFiles = workingChanges.changedFiles;
-
-      if (changedFiles.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ status: "ok", risk_score: 0, risk_label: "none", changed_files: [], message: "No changes detected" }),
-          }],
-        };
-      }
-
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
-      try {
-        db.runMigrations(database);
-
-        const affectedNodes: any[] = [];
-        for (const file of changedFiles) {
-          const nodes = database.prepare(
-            "SELECT node_id, kind, symbol, file FROM nodes WHERE feature_name = ? AND file LIKE ?"
-          ).all(GLOBAL_FEATURE, `%${file}%`);
-          affectedNodes.push(...nodes);
-        }
-
-        let totalImpact = 0;
-        let sideEffectCount = 0;
-        const impactedKinds: Record<string, number> = {};
-
-        for (const node of affectedNodes) {
-          const impacts = database.prepare(`
-            WITH RECURSIVE walk AS (
-              SELECT to_node_id, edge_type, 1 as depth
-              FROM edges WHERE feature_name = ? AND from_node_id = ?
-              UNION ALL
-              SELECT e.to_node_id, e.edge_type, w.depth + 1
-              FROM walk w JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
-              WHERE w.depth < 3
-            )
-            SELECT DISTINCT to_node_id, edge_type FROM walk
-          `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE);
-
-          totalImpact += impacts.length;
-          for (const imp of impacts) {
-            const targetNode = database.prepare(
-              "SELECT kind FROM nodes WHERE feature_name = ? AND node_id = ?"
-            ).get(GLOBAL_FEATURE, (imp as any).to_node_id) as any;
-            if (targetNode) {
-              impactedKinds[targetNode.kind] = (impactedKinds[targetNode.kind] || 0) + 1;
-              if (["table", "external_api", "event", "background_job"].includes(targetNode.kind)) {
-                sideEffectCount++;
-              }
-            }
-          }
-        }
-
-        const nodeRatio = Math.min(affectedNodes.length / 20, 1);
-        const impactRatio = Math.min(totalImpact / 100, 1);
-        const sideEffectRatio = Math.min(sideEffectCount / 10, 1);
-        const riskScore = Math.round((nodeRatio * 0.3 + impactRatio * 0.4 + sideEffectRatio * 0.3) * 100);
-        const riskLabel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
-
-        const memoryNodeIds = new Set<string>(affectedNodes.map((n: any) => n.node_id));
-        for (const node of affectedNodes) {
-          const downstream = database.prepare(`
-            WITH RECURSIVE walk AS (
-              SELECT to_node_id, 1 as depth FROM edges WHERE feature_name = ? AND from_node_id = ?
-              UNION ALL
-              SELECT e.to_node_id, w.depth + 1 FROM walk w
-              JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
-              WHERE w.depth < 3
-            )
-            SELECT DISTINCT to_node_id FROM walk
-          `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE) as Array<{ to_node_id: string }>;
-          for (const r of downstream) memoryNodeIds.add(r.to_node_id);
-        }
-        const memories = await fetchMemoriesForTraversal(dbPath, {
-          start_nodes: [...memoryNodeIds].map((id) => ({ node_id: id })),
-        });
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "ok",
-              changed_files: changedFiles,
-              affected_nodes: affectedNodes.length,
-              downstream_impacts: totalImpact,
-              side_effect_count: sideEffectCount,
-              impacted_kinds: impactedKinds,
-              risk_score: riskScore,
-              risk_label: riskLabel,
-              ...(memories.length > 0 ? { memories } : {}),
-            }),
-          }],
-        };
-      } finally {
-        database.close();
-      }
-    }
-  );
-
   // --- kk_precommit ---
   server.tool(
     "kk_precommit",
-    `Pre-commit impact analysis. Reads uncommitted changes (staged + unstaged + untracked), runs discovery and tracing on the working tree, and diffs against the committed graph. Reports: new symbols, new edges, orphans (new code nobody calls yet), tables touched (reads/writes), breaking changes (modified symbols with downstream dependents), and missing coverage. Nothing is persisted — this is a read-only analysis of your working tree.
+    `Pre-commit analysis of UNCOMMITTED changes only (working tree: staged + unstaged + untracked). Reports new symbols, new edges, orphans, tables touched, breaking changes, missing coverage, and a structured 'coverage_action' that tells the agent how to extend customBoundaries / ignoreCoverage.
 
-Use BEFORE committing to catch architecture gaps: orphaned services, unwired code paths, missing table access patterns. Complements kk_risk (which only scores existing graph nodes) by also discovering brand-new code that the committed graph can't see.`,
+Use BEFORE committing to catch architecture gaps. For branch-level review of committed work, use kk_review.`,
     {},
     async () => {
       const cwd = process.cwd();
@@ -427,6 +315,40 @@ Use BEFORE committing to catch architecture gaps: orphaned services, unwired cod
       const { reviewGraph } = await import("./review-graph.js");
       const { fetchMemoriesForNodes, fetchGlobalMemories } = await import("./memory-helpers.js");
       const result: any = await reviewGraph(cwd);
+
+      const touchedNodeIds = result.touched_node_ids || [];
+      const [touchedMemories, globalMemories] = await Promise.all([
+        fetchMemoriesForNodes(dbPath, touchedNodeIds),
+        fetchGlobalMemories(dbPath, { categories: ["wiki", "decision", "warning"] }),
+      ]);
+      const seen = new Set<string>();
+      const memories: any[] = [];
+      for (const m of [...touchedMemories, ...globalMemories]) {
+        if (seen.has(m.memory_id)) continue;
+        seen.add(m.memory_id);
+        memories.push(m);
+      }
+      if (memories.length > 0) result.memories = memories;
+
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+  );
+
+  // --- kk_review ---
+  server.tool(
+    "kk_review",
+    `Branch-level review. Computes the diff window as merge-base(<base>, HEAD) -> working tree, so it covers committed branch commits + any uncommitted edits. Same output shape as kk_precommit (new_symbols, new_edges, orphans, tables_touched, breaking_changes, missing_coverage, coverage_action, memories) plus a 'diff_window' field describing the window analyzed.
+
+Use this for PR review or self-review of a feature branch. For uncommitted-only analysis, use kk_precommit.`,
+    {
+      base: z.string().optional().describe("Git ref to use as the diff base (default: 'main')."),
+    },
+    async ({ base }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const { reviewGraph } = await import("./review-graph.js");
+      const { fetchMemoriesForNodes, fetchGlobalMemories } = await import("./memory-helpers.js");
+      const result: any = await reviewGraph(cwd, { baseRef: base || "main" });
 
       const touchedNodeIds = result.touched_node_ids || [];
       const [touchedMemories, globalMemories] = await Promise.all([

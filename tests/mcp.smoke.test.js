@@ -32,10 +32,10 @@ const CLI_TO_MCP = {
   downstream: "kk_downstream",
   "side-effects": "kk_side_effects",
   why: "kk_why",
-  risk: "kk_risk",
   search: "kk_search",
   status: "kk_status",
   precommit: "kk_precommit",
+  review: "kk_review",
   "memory write": "kk_memory_write",
   "memory update": "kk_memory_update",
   "memory delete": "kk_memory_delete",
@@ -49,6 +49,10 @@ before(async () => {
   await fs.cp(SOURCE_FIXTURE, FIXTURE, { recursive: true });
   // Don't carry over a stale graph from the source fixture
   await fs.rm(path.join(FIXTURE, ".kodeklarity"), { recursive: true, force: true }).catch(() => {});
+  // Initialize as a git repo so kk_review (which resolves a merge-base) can succeed.
+  execSync("git init -q -b main", { cwd: FIXTURE });
+  execSync("git -c user.email=t@t -c user.name=T add -A", { cwd: FIXTURE });
+  execSync("git -c user.email=t@t -c user.name=T commit -q -m initial", { cwd: FIXTURE });
   execSync(`node "${KK_CLI}" init --json`, { cwd: FIXTURE, stdio: "ignore" });
 });
 
@@ -164,11 +168,14 @@ test("MCP: kk_why responds (path or no-path)", async () => {
   });
 });
 
-test("MCP: kk_risk returns ok", async () => {
+test("MCP: kk_review returns ok with diff_window when --base resolves", async () => {
   await withClient(async (client) => {
-    const res = await client.callTool({ name: "kk_risk", arguments: {} });
+    // Use HEAD as the base — merge-base resolves to HEAD itself, valid diff window.
+    const res = await client.callTool({ name: "kk_review", arguments: { base: "HEAD" } });
     const j = readJson(res);
     assert.equal(j.status, "ok");
+    assert.ok(j.diff_window, "kk_review must include diff_window");
+    assert.equal(j.diff_window.base_ref, "HEAD");
   });
 });
 

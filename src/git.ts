@@ -148,6 +148,100 @@ export function getWorkingChanges(cwd: string): GitDiff {
   return { changedFiles, deletedFiles, renamedFiles };
 }
 
+export interface BranchDiff extends GitDiff {
+  /** SHA of the merge-base between baseRef and HEAD. */
+  mergeBase: string;
+  /** Number of commits on the current branch since the merge-base. */
+  commitsOnBranch: number;
+}
+
+/**
+ * Get all changes since the branch diverged from `baseRef`, including
+ * committed-but-unmerged commits AND any uncommitted edits in the working tree.
+ *
+ * Semantics: merge-base(baseRef, HEAD) → working tree.
+ * This is the "would-be PR" view — what a reviewer sees if you push right now.
+ *
+ * Throws if baseRef cannot be resolved (e.g., main doesn't exist locally).
+ */
+export function getBranchDiff(cwd: string, baseRef: string): BranchDiff {
+  let mergeBase: string;
+  try {
+    mergeBase = execSync(`git merge-base ${baseRef} HEAD`, {
+      cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to resolve merge-base of '${baseRef}' and HEAD: ${msg}`);
+  }
+  if (!mergeBase) {
+    throw new Error(`No merge-base found between '${baseRef}' and HEAD.`);
+  }
+
+  const changedFiles: string[] = [];
+  const deletedFiles: string[] = [];
+  const renamedFiles: Array<{ from: string; to: string }> = [];
+  const seen = new Set<string>();
+
+  // git diff <merge-base> (no end ref) compares against working tree —
+  // includes committed + staged + unstaged changes since the merge-base.
+  let diffOutput = "";
+  try {
+    diffOutput = execSync(`git diff --name-status ${mergeBase}`, {
+      cwd, encoding: "utf8", stdio: "pipe",
+    }).trim();
+  } catch {
+    // empty diff is fine
+  }
+
+  for (const line of diffOutput.split("\n").filter(Boolean)) {
+    const parts = line.split("\t");
+    const status = parts[0];
+    const file = parts[1];
+    if (!file || seen.has(file)) continue;
+    seen.add(file);
+
+    if (status === "D") {
+      deletedFiles.push(file);
+    } else if (status.startsWith("R")) {
+      const toFile = parts[2];
+      renamedFiles.push({ from: file, to: toFile });
+      changedFiles.push(toFile);
+      seen.add(toFile);
+    } else {
+      changedFiles.push(file);
+    }
+  }
+
+  // Untracked files (not yet in any commit) — git diff misses these.
+  let untracked = "";
+  try {
+    untracked = execSync("git ls-files --others --exclude-standard", {
+      cwd, encoding: "utf8", stdio: "pipe",
+    }).trim();
+  } catch {
+    // no untracked
+  }
+  for (const file of untracked.split("\n").filter(Boolean)) {
+    if (!seen.has(file)) {
+      changedFiles.push(file);
+      seen.add(file);
+    }
+  }
+
+  let commitsOnBranch = 0;
+  try {
+    const out = execSync(`git rev-list --count ${mergeBase}..HEAD`, {
+      cwd, encoding: "utf8", stdio: "pipe",
+    }).trim();
+    commitsOnBranch = Number.parseInt(out, 10) || 0;
+  } catch {
+    commitsOnBranch = 0;
+  }
+
+  return { changedFiles, deletedFiles, renamedFiles, mergeBase, commitsOnBranch };
+}
+
 /** Get merge base between current branch and a target branch */
 export function getMergeBase(cwd: string, targetBranch: string): string | null {
   try {

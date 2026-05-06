@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
@@ -44,6 +45,10 @@ before(async () => {
   await fs.cp(SOURCE_FIXTURE, FIXTURE_PATH, { recursive: true });
   // Drop any committed .kodeklarity from the source fixture so we start clean.
   await fs.rm(path.join(FIXTURE_PATH, ".kodeklarity"), { recursive: true, force: true }).catch(() => {});
+  // Initialize as a git repo so review/precommit have something to diff against.
+  execSync("git init -q -b main", { cwd: FIXTURE_PATH });
+  execSync("git -c user.email=t@t -c user.name=T add -A", { cwd: FIXTURE_PATH });
+  execSync("git -c user.email=t@t -c user.name=T commit -q -m initial", { cwd: FIXTURE_PATH });
 });
 
 after(async () => {
@@ -148,12 +153,50 @@ describe("e2e: kk why", () => {
   });
 });
 
-describe("e2e: kk risk", () => {
-  it("returns risk score (0 when no changes)", () => {
-    const output = kk("risk --json");
+describe("e2e: kk review", () => {
+  it("returns ok status with diff_window when --base resolves", () => {
+    // The fixture is initialized as a git repo; use HEAD as a self-base so
+    // merge-base resolves to HEAD itself (zero changes, but valid diff window).
+    const output = kk("review --base HEAD --json");
     const result = JSON.parse(output);
     assert.equal(result.status, "ok");
-    assert.ok("risk_score" in result || "message" in result);
+    assert.ok(result.diff_window, "diff_window should be present when --base is used");
+    assert.equal(result.diff_window.base_ref, "HEAD");
+    assert.ok(typeof result.diff_window.merge_base === "string");
+  });
+
+  it("reports committed branch changes that kk precommit alone misses", () => {
+    // Snapshot HEAD so we can roll back at the end (other tests share this fixture).
+    const origSha = execSync("git rev-parse HEAD", { cwd: FIXTURE_PATH, encoding: "utf8" }).trim();
+
+    const targetRel = "src/lib/actions/posts.ts";
+    const target = path.join(FIXTURE_PATH, targetRel);
+    const original = fsSync.readFileSync(target, "utf8");
+    fsSync.writeFileSync(target, original + "\n// review-test marker\n");
+    execSync("git -c user.email=t@t -c user.name=T add -A", { cwd: FIXTURE_PATH });
+    execSync("git -c user.email=t@t -c user.name=T commit -q -m feature", { cwd: FIXTURE_PATH });
+
+    try {
+      const precommit = JSON.parse(kk("precommit --json"));
+      assert.equal(
+        precommit.changed_files.length,
+        0,
+        "precommit should see nothing — working tree is clean after commit",
+      );
+
+      const review = JSON.parse(kk(`review --base ${origSha} --json`));
+      assert.equal(review.status, "ok");
+      assert.ok(review.diff_window, "review must include diff_window");
+      assert.equal(review.diff_window.commits_on_branch, 1);
+      assert.ok(
+        review.changed_files.includes(targetRel),
+        `review must surface the committed change (got ${JSON.stringify(review.changed_files)})`,
+      );
+    } finally {
+      // Reset back to the original commit and restore the file.
+      execSync(`git reset --hard ${origSha}`, { cwd: FIXTURE_PATH, stdio: "ignore" });
+      fsSync.writeFileSync(target, original);
+    }
   });
 });
 
@@ -209,7 +252,7 @@ describe("e2e: help", () => {
     assert.ok(output.includes("kk — KodeKlarity"), "should show kk name");
     assert.ok(output.includes("kk init"), "should show init command");
     assert.ok(output.includes("kk impact"), "should show impact command");
-    assert.ok(output.includes("kk risk"), "should show risk command");
+    assert.ok(output.includes("kk review"), "should show review command");
     assert.ok(!output.includes("kk-codeslice"), "should NOT contain old name");
   });
 });

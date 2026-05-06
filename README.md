@@ -66,7 +66,7 @@ Every coding agent has a Bash tool. That's all KodeKlarity needs.
 
 No plugin to install per editor. No MCP server to configure. No agent-specific glue. **Every kk command takes `--json`** — output is structured, deterministic, sub-second, and works identically in Claude Code, Cursor, Codex, Cline, Windsurf, Aider, or anything else that can shell out.
 
-Two modes the agent operates in:
+Three modes the agent operates in:
 
 **During work — exploratory lookups:**
 
@@ -77,7 +77,7 @@ kk side-effects createOrder --json        # what writes/triggers/emits?
 kk why --from createOrder --to users --json   # how are these connected?
 ```
 
-**Before commit — the workflow gate:**
+**Before commit — the workflow gate (uncommitted changes):**
 
 ```bash
 $ kk precommit --json
@@ -96,7 +96,41 @@ $ kk precommit --json
 }
 ```
 
-`kk precommit` is the *gate* — agents run it before claiming done, not during exploration. The exploratory commands run as the agent reasons; precommit runs once at the end. Both produce the same shape: structured JSON the agent parses directly. No prose scraping.
+**Branch / PR review — the full diff since branch was created:**
+
+```bash
+$ kk review --base main --json
+{
+  "status": "ok",
+  "diff_window": {
+    "base_ref": "main",
+    "merge_base": "bf02eec",
+    "commits_on_branch": 3
+  },
+  "changed_files": [...],         # everything since merge-base, committed + uncommitted
+  "new_symbols":   [...],
+  "new_edges":     [...],
+  "breaking_changes": [
+    {
+      "symbol": "updateUser",
+      "kind": "action",
+      "downstream_count": 12,
+      "verdict": "signature_changed",   # ← AST-level: callers may break
+      "note": "signature changed — 12 downstream dependents (callers may break)"
+    }
+  ],
+  "tables_touched": { ... },
+  "orphans":       [...],
+  "missing_coverage": [...],
+  "coverage_action": { ... },
+  "memories":      [...],
+  "stats":         { ... }
+}
+```
+
+`kk precommit` is the *uncommitted-only* gate — what's in your working tree right now. `kk review --base <ref>` is the *branch-level* report — everything since the branch diverged, including commits already made. Both return the same field shape so the agent's parsing logic is identical.
+
+**No risk score, no synthetic numbers — the structural fields *are* the risk signals.** Agents read `breaking_changes`, `tables_touched.writes`, `orphans`, and `coverage_action` directly. Each `breaking_changes` entry includes an AST-level `verdict` (`signature_changed`, `removed_or_renamed`, `body_changed`) so the agent prioritizes — declarations that are textually unchanged are silently dropped from the report (no file-granular noise).
 
 <br>
 
@@ -138,13 +172,13 @@ The full command surface — every command takes `--json` for agent consumption:
 ```bash
 kk init                          # build the graph (5s, zero LLM cost)
 kk rebuild                       # incremental update from git diff
-kk precommit                     # what's in this diff? (your main pre-commit gate)
+kk precommit                     # uncommitted changes only — pre-commit gate
+kk review --base main            # branch-level review — committed + uncommitted vs main
 kk impact updateUser --depth 2   # what breaks if I change this symbol?
 kk upstream requireAuth          # what calls this?
 kk downstream createOrder        # what does this call?
 kk side-effects createOrder      # what writes/triggers/emits?
 kk why --from createOrder --to users   # how are these connected?
-kk risk                          # 0–100 score for current changes
 kk status                        # graph overview
 kk search billing                # find nodes by name
 kk memory write "..."            # agent-written notes attached to nodes
@@ -213,20 +247,20 @@ That's the whole setup.
 
 ## What it catches
 
-Every `kk precommit --json` returns a structured report covering:
+Every `kk precommit --json` and `kk review --base <ref> --json` returns the same structured report:
 
 | Signal | What it means |
 |---|---|
 | `new_symbols` | Functions, routes, services your diff introduces |
 | `new_edges` | Calls / imports / writes / triggers connecting them |
-| `breaking_changes` | Existing nodes whose downstream count > 0 — high-risk |
+| `breaking_changes` | Existing nodes whose **declaration actually changed** at the AST level (per-symbol diff against the base ref). Each entry has a `verdict`: `signature_changed` (high signal — callers may break), `removed_or_renamed` (high signal — check callers), `body_changed` (medium — verify behavior). Symbols whose text is unchanged are dropped, so file-level edits don't pollute the report. |
 | `tables_touched.writes` / `.reads` | DB tables your changes hit, by direction |
 | `orphans` | New code that nothing calls — wired up wrong, or dead |
 | `missing_coverage` + `coverage_action` | Diff files with no boundary nodes — agent fixes via customBoundary or ignoreCoverage |
-| `risk` (0–100) | Composite score from impact size, table writes, breaking changes |
 | `memories` | Auto-surfaced agent notes attached to touched nodes |
+| `diff_window` (review only) | Merge-base SHA + commit count, so the agent knows what window was analyzed |
 
-The agent reads this. The dashboard renders this. Both come from the same engine.
+Each non-empty field is itself a risk signal — there's no synthetic score. Agents prioritize by reading the structural fields directly. The dashboard renders the same data visually.
 
 <br>
 
@@ -236,6 +270,7 @@ The agent reads this. The dashboard renders this. Both come from the same engine
 
 - **Pure static analysis. Zero LLM calls in the core path.** Predictable cost (free), predictable latency (sub-second queries), deterministic output.
 - **Symbol-level accuracy.** Uses TypeScript's `ts.createProgram` for type-aware tracing — finds connections `grep` will never see (re-exports, aliased imports, dynamic dispatch flagged explicitly as gaps).
+- **AST-level diff for `breaking_changes`.** When you change one function in a 500-line file, kk doesn't flag every other symbol in that file as "modified". For each candidate, kk parses both the merge-base version (`git show <ref>:<file>`) and the working-tree version, normalizes whitespace, and tags each entry with a verdict. Symbols whose declaration is textually unchanged drop out entirely. On real diffs this typically eliminates 80–90% of noise.
 - **Local SQLite + FTS5.** Graph and memory live at `.kodeklarity/index/`. Never leaves your machine. No telemetry.
 - **Memory survives every rebuild.** Agents write durable notes (`gotcha`, `decision`, `warning`) attached to nodes; rebuilding the graph wipes nodes/edges but the `memories` table is sacred.
 - **`customBoundaries` + `ignoreCoverage`.** The two knobs the agent uses to make the graph match how your code is actually laid out — so coverage warnings stay quiet.

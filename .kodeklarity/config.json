@@ -21,6 +21,13 @@
       "reason": "kk core source module (top-level src/*.ts)"
     },
     {
+      "name": "kk_core_js",
+      "kind": "service",
+      "glob": "src/*.js",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "kk core legacy JS module (query.js, db.js, ast.js, etc.)"
+    },
+    {
       "name": "dashboard_command",
       "kind": "command",
       "glob": "src/dashboard/index.ts",
@@ -101,9 +108,9 @@
     "__tests__/**"
   ],
   "ignoreCoverage": [
-    "src/cli.js",
     "src/dashboard/web/src/api/types.ts",
-    "src/dashboard/web/src/main.tsx"
+    "src/dashboard/web/src/main.tsx",
+    "src/dashboard/web/vite.config.ts"
   ],
   "edgeRules": [],
   "importAliases": {},
@@ -112,7 +119,7 @@
     "excludeTypeOnlyImports": true
   },
   "_meta": {
-    "generatedAt": "2026-05-06T13:36:03.944Z",
+    "generatedAt": "2026-05-06T16:09:13.578Z",
     "lastModifiedBy": "kk_init",
     "projectName": "kodeklarity"
   }

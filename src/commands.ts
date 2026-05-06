@@ -21,6 +21,7 @@ interface CommandFlags {
   file?: string;
   from?: string;
   to?: string;
+  base?: string;
 }
 
 function parseCommandFlags(args: string[]): CommandFlags {
@@ -39,6 +40,7 @@ function parseCommandFlags(args: string[]): CommandFlags {
     if (arg === "--db-path" && args[i + 1]) { flags.dbPath = args[++i]; continue; }
     if (arg === "--from" && args[i + 1]) { flags.from = args[++i]; continue; }
     if (arg === "--to" && args[i + 1]) { flags.to = args[++i]; continue; }
+    if (arg === "--base" && args[i + 1]) { flags.base = args[++i]; continue; }
     if (!arg.startsWith("--")) { positional.push(arg); }
   }
 
@@ -293,143 +295,6 @@ export async function handleWhy(args: string[]): Promise<number> {
   }
 }
 
-export async function handleRisk(args: string[]): Promise<number> {
-  const flags = parseCommandFlags(args);
-
-  // Get changed files from git (unstaged + staged + untracked)
-  const workingChanges = getWorkingChanges(process.cwd());
-  const changedFiles = workingChanges.changedFiles;
-
-  if (changedFiles.length === 0) {
-    const result = { status: "ok", message: "No changed files detected.", risk_score: 0, changed_files: [] };
-    emitResult(result, flags.json, () => console.log("  No changed files detected."));
-    return 0;
-  }
-
-  // Find which graph nodes are in changed files and trace their impact
-  try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      // Find nodes in changed files
-      const affectedNodes: any[] = [];
-      for (const file of changedFiles) {
-        const nodes = database.prepare(
-          "SELECT node_id, kind, symbol, file FROM nodes WHERE feature_name = ? AND file LIKE ?"
-        ).all(GLOBAL_FEATURE, `%${file}%`);
-        affectedNodes.push(...nodes);
-      }
-
-      // Find downstream impact of affected nodes
-      let totalImpact = 0;
-      let sideEffectCount = 0;
-      const impactedKinds: Record<string, number> = {};
-
-      for (const node of affectedNodes) {
-        const impacts = database.prepare(`
-          WITH RECURSIVE walk AS (
-            SELECT to_node_id, edge_type, 1 as depth
-            FROM edges WHERE feature_name = ? AND from_node_id = ?
-            UNION ALL
-            SELECT e.to_node_id, e.edge_type, w.depth + 1
-            FROM walk w JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
-            WHERE w.depth < 3
-          )
-          SELECT DISTINCT to_node_id, edge_type FROM walk
-        `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE);
-
-        totalImpact += impacts.length;
-        for (const imp of impacts) {
-          const targetNode = database.prepare(
-            "SELECT kind FROM nodes WHERE feature_name = ? AND node_id = ?"
-          ).get(GLOBAL_FEATURE, (imp as any).to_node_id) as any;
-          if (targetNode) {
-            impactedKinds[targetNode.kind] = (impactedKinds[targetNode.kind] || 0) + 1;
-            if (["table", "external_api", "event", "background_job"].includes(targetNode.kind)) {
-              sideEffectCount++;
-            }
-          }
-        }
-      }
-
-      // Simple risk score: 0-100
-      const nodeRatio = Math.min(affectedNodes.length / 20, 1); // up to 20 nodes = max
-      const impactRatio = Math.min(totalImpact / 100, 1); // up to 100 impacts = max
-      const sideEffectRatio = Math.min(sideEffectCount / 10, 1); // up to 10 side effects = max
-      const riskScore = Math.round((nodeRatio * 0.3 + impactRatio * 0.4 + sideEffectRatio * 0.3) * 100);
-
-      const riskLabel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
-
-      const memoryNodeIds = new Set<string>(affectedNodes.map((n: any) => n.node_id));
-      // Also include impacted (downstream) nodes so memories on indirectly-affected nodes surface
-      for (const node of affectedNodes) {
-        const impacts = database.prepare(`
-          WITH RECURSIVE walk AS (
-            SELECT to_node_id, 1 as depth FROM edges WHERE feature_name = ? AND from_node_id = ?
-            UNION ALL
-            SELECT e.to_node_id, w.depth + 1 FROM walk w
-            JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
-            WHERE w.depth < 3
-          )
-          SELECT DISTINCT to_node_id FROM walk
-        `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE) as Array<{ to_node_id: string }>;
-        for (const i of impacts) memoryNodeIds.add(i.to_node_id);
-      }
-      const memories = await fetchMemoriesForNodes(flags.dbPath, memoryNodeIds);
-
-      const result = {
-        status: "ok",
-        changed_files: changedFiles,
-        changed_file_count: changedFiles.length,
-        affected_nodes: affectedNodes.length,
-        downstream_impacts: totalImpact,
-        side_effect_count: sideEffectCount,
-        impacted_kinds: impactedKinds,
-        risk_score: riskScore,
-        risk_label: riskLabel,
-        memories,
-      };
-
-      emitResult(result, flags.json, (r) => {
-        console.log("");
-        console.log(`  Changed files: ${r.changed_file_count}`);
-        for (const f of changedFiles.slice(0, 8)) {
-          console.log(`    ${f}`);
-        }
-        if (changedFiles.length > 8) console.log(`    ... and ${changedFiles.length - 8} more`);
-        console.log("");
-        console.log(`  Affected nodes:      ${r.affected_nodes}`);
-        console.log(`  Downstream impacts:  ${r.downstream_impacts}`);
-        console.log(`  Side effects:        ${r.side_effect_count}`);
-        console.log(`  Risk score:          ${r.risk_score}/100 (${r.risk_label})`);
-
-        if (Object.keys(r.impacted_kinds).length > 0) {
-          console.log("");
-          console.log("  Impact by type:");
-          for (const [kind, count] of Object.entries(r.impacted_kinds).sort((a, b) => (b[1] as number) - (a[1] as number))) {
-            console.log(`    ${kind}: ${count}`);
-          }
-        }
-        console.log("");
-        if (r.memories && r.memories.length > 0) {
-          printMemoriesBlock(r.memories);
-        }
-      });
-
-      return 0;
-    } finally {
-      database.close();
-    }
-  } catch (err) {
-    console.error(`Risk analysis failed: ${err instanceof Error ? err.message : err}`);
-    return 1;
-  }
-}
-
 export async function handleStatus(args: string[]): Promise<number> {
   const flags = parseCommandFlags(args);
 
@@ -577,108 +442,114 @@ export async function handleSearch(args: string[]): Promise<number> {
   }
 }
 
-// --- Precommit command ---
+// --- Precommit / Review commands (shared engine) ---
+
+function printReviewHuman(r: any, label: string): void {
+  if (r.message && r.stats.total_changed_files === 0) {
+    console.log(`  ${r.message}`);
+    return;
+  }
+
+  console.log("");
+  if (r.diff_window) {
+    const w = r.diff_window;
+    console.log(
+      `  ${label} - base ${w.base_ref} (merge-base ${String(w.merge_base).slice(0, 7)}, ${w.commits_on_branch} commit${w.commits_on_branch === 1 ? "" : "s"} on branch)`,
+    );
+  }
+  console.log(`  Changed files: ${r.stats.total_changed_files}`);
+  console.log("");
+
+  if (r.new_symbols.length > 0) {
+    console.log("  new_symbols:");
+    for (const s of r.new_symbols) console.log(`    ${s.symbol} (${s.kind}) - ${s.file}:${s.line}`);
+    console.log("");
+  }
+
+  if (r.new_edges.length > 0) {
+    console.log("  new_edges:");
+    for (const e of r.new_edges) console.log(`    ${e.from_symbol} -> ${e.to_symbol} (${e.edge_type})`);
+    console.log("");
+  }
+
+  if (r.orphans.length > 0) {
+    console.log("  orphans:");
+    for (const o of r.orphans) {
+      console.log(`    [orphan] ${o.symbol} (${o.kind}) - not called from any existing code path`);
+      if (o.suggestion) console.log(`      -> ${o.suggestion}`);
+    }
+    console.log("");
+  }
+
+  if (r.tables_touched.writes.length > 0 || r.tables_touched.reads.length > 0) {
+    console.log("  tables_touched:");
+    if (r.tables_touched.writes.length > 0) console.log(`    WRITES: ${r.tables_touched.writes.join(", ")}`);
+    if (r.tables_touched.reads.length > 0)  console.log(`    READS:  ${r.tables_touched.reads.join(", ")}`);
+    console.log("");
+  }
+
+  if (r.breaking_changes.length > 0) {
+    console.log("  breaking_changes:");
+    for (const b of r.breaking_changes) console.log(`    ${b.symbol} (${b.kind}) - ${b.note}`);
+    console.log("");
+  }
+
+  if (r.missing_coverage.length > 0) {
+    console.log("  missing_coverage:");
+    for (const m of r.missing_coverage) console.log(`    ? ${m}`);
+    console.log("");
+  }
+
+  if (r.memories && r.memories.length > 0) {
+    printMemoriesBlock(r.memories, "relevant_memories");
+  }
+}
+
+async function runReviewWithMemories(
+  cwd: string,
+  dbPath: string,
+  options: { baseRef?: string },
+): Promise<any> {
+  const { reviewGraph } = await import("./review-graph.js");
+  const result: any = await reviewGraph(cwd, { baseRef: options.baseRef });
+
+  const touchedNodeIds = result.touched_node_ids || [];
+  const [touchedMemories, globalMemories] = await Promise.all([
+    fetchMemoriesForNodes(dbPath, touchedNodeIds),
+    fetchGlobalMemories(dbPath, { categories: ["wiki", "decision", "warning"] }),
+  ]);
+  const seen = new Set<string>();
+  const memories: Memory[] = [];
+  for (const m of [...touchedMemories, ...globalMemories]) {
+    if (seen.has(m.memory_id)) continue;
+    seen.add(m.memory_id);
+    memories.push(m);
+  }
+  result.memories = memories;
+  return result;
+}
 
 export async function handlePrecommit(args: string[]): Promise<number> {
   const flags = parseCommandFlags(args);
-
   try {
-    const { reviewGraph } = await import("./review-graph.js");
-    const result: any = await reviewGraph(process.cwd());
-
-    // Surface memories on existing nodes touched by this change + global wiki/decision memories.
-    const touchedNodeIds = result.touched_node_ids || [];
-    const [touchedMemories, globalMemories] = await Promise.all([
-      fetchMemoriesForNodes(flags.dbPath, touchedNodeIds),
-      fetchGlobalMemories(flags.dbPath, { categories: ["wiki", "decision", "warning"] }),
-    ]);
-    // De-dup by memory_id (a node memory could also match globals if categories changed)
-    const seen = new Set<string>();
-    const memories: Memory[] = [];
-    for (const m of [...touchedMemories, ...globalMemories]) {
-      if (seen.has(m.memory_id)) continue;
-      seen.add(m.memory_id);
-      memories.push(m);
-    }
-    result.memories = memories;
-
-    emitResult(result, flags.json, (r) => {
-      if (r.message && r.stats.total_changed_files === 0) {
-        console.log(`  ${r.message}`);
-        return;
-      }
-
-      console.log("");
-      console.log(`  Changed files: ${r.stats.total_changed_files}`);
-      console.log("");
-
-      // New symbols
-      if (r.new_symbols.length > 0) {
-        console.log("  new_symbols:");
-        for (const s of r.new_symbols) {
-          console.log(`    ${s.symbol} (${s.kind}) — ${s.file}:${s.line}`);
-        }
-        console.log("");
-      }
-
-      // New edges
-      if (r.new_edges.length > 0) {
-        console.log("  new_edges:");
-        for (const e of r.new_edges) {
-          console.log(`    ${e.from_symbol} → ${e.to_symbol} (${e.edge_type})`);
-        }
-        console.log("");
-      }
-
-      // Orphans
-      if (r.orphans.length > 0) {
-        console.log("  orphans:");
-        for (const o of r.orphans) {
-          console.log(`    \u26A0 ${o.symbol} (${o.kind}) — not called from any existing code path`);
-          if (o.suggestion) console.log(`      \u2192 ${o.suggestion}`);
-        }
-        console.log("");
-      }
-
-      // Tables touched
-      if (r.tables_touched.writes.length > 0 || r.tables_touched.reads.length > 0) {
-        console.log("  tables_touched:");
-        if (r.tables_touched.writes.length > 0) {
-          console.log(`    WRITES: ${r.tables_touched.writes.join(", ")}`);
-        }
-        if (r.tables_touched.reads.length > 0) {
-          console.log(`    READS:  ${r.tables_touched.reads.join(", ")}`);
-        }
-        console.log("");
-      }
-
-      // Breaking changes
-      if (r.breaking_changes.length > 0) {
-        console.log("  breaking_changes:");
-        for (const b of r.breaking_changes) {
-          console.log(`    ${b.symbol} (${b.kind}) — ${b.note}`);
-        }
-        console.log("");
-      }
-
-      // Missing coverage
-      if (r.missing_coverage.length > 0) {
-        console.log("  missing_coverage:");
-        for (const m of r.missing_coverage) {
-          console.log(`    ? ${m}`);
-        }
-        console.log("");
-      }
-
-      // Relevant memories (touched nodes + global wiki/decision)
-      if (r.memories && r.memories.length > 0) {
-        printMemoriesBlock(r.memories, "relevant_memories");
-      }
-    });
-
+    const result = await runReviewWithMemories(process.cwd(), flags.dbPath, {});
+    emitResult(result, flags.json, (r) => printReviewHuman(r, "Precommit"));
     return 0;
   } catch (err) {
     console.error(`Precommit analysis failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+export async function handleReview(args: string[]): Promise<number> {
+  const flags = parseCommandFlags(args);
+  const baseRef = flags.base || "main";
+  try {
+    const result = await runReviewWithMemories(process.cwd(), flags.dbPath, { baseRef });
+    emitResult(result, flags.json, (r) => printReviewHuman(r, "Review"));
+    return 0;
+  } catch (err) {
+    console.error(`Review failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }

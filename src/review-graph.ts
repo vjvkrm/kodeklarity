@@ -3,7 +3,8 @@ import { discover } from "./discover/index.js";
 import { traceImportEdges } from "./trace.js";
 import { traceWithTypeChecker } from "./type-tracer.js";
 import { loadConfig } from "./config.js";
-import { getWorkingChanges } from "./git.js";
+import { getWorkingChanges, getBranchDiff } from "./git.js";
+import { classifyFileSymbols, resetSymbolDiffCache, type SymbolChangeVerdict } from "./symbol-diff.js";
 import type { BoundaryNode, BoundaryEdge } from "./discover/types.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
@@ -46,7 +47,7 @@ export interface ReviewGraphResult {
     reads: string[];
   };
 
-  /** Existing nodes in modified files — potential breaking changes */
+  /** Existing nodes whose declaration actually changed (AST-level, not file-level). */
   breaking_changes: Array<{
     node_id: string;
     symbol: string;
@@ -54,6 +55,8 @@ export interface ReviewGraphResult {
     file: string;
     downstream_count: number;
     note: string;
+    /** AST-level classification — agents prioritize signature_changed and removed_or_renamed. */
+    verdict: SymbolChangeVerdict;
   }>;
 
   /** Missing coverage signals */
@@ -77,6 +80,13 @@ export interface ReviewGraphResult {
   /** Node IDs of existing graph nodes whose files were modified (for memory lookup, etc.) */
   touched_node_ids: string[];
 
+  /** When called with a baseRef (e.g. `kk review --base main`), describes the diff window. */
+  diff_window?: {
+    base_ref: string;
+    merge_base: string;
+    commits_on_branch: number;
+  };
+
   /** Summary stats */
   stats: {
     total_changed_files: number;
@@ -89,23 +99,52 @@ export interface ReviewGraphResult {
   };
 }
 
+export interface ReviewGraphOptions {
+  /** When set, diff window is "merge-base(baseRef, HEAD) → working tree" — covers committed branch
+   *  commits + uncommitted changes. When unset, only uncommitted changes are analyzed. */
+  baseRef?: string;
+}
+
 /**
  * Run review-graph: discover the working tree, diff against the committed graph,
  * report new symbols, orphans, tables touched, and breaking changes.
  * Nothing is persisted — purely in-memory analysis.
+ *
+ * - No baseRef → working-tree-only mode (powers `kk precommit`)
+ * - baseRef set → branch-level mode (powers `kk review --base <ref>`)
  */
-export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
+export async function reviewGraph(
+  cwd: string,
+  options: ReviewGraphOptions = {},
+): Promise<ReviewGraphResult> {
   const dbPath = path.join(cwd, DEFAULT_DB_PATH);
 
-  // 1. Get changed files from git working tree
-  const workingChanges = getWorkingChanges(cwd);
-  const changedFiles = workingChanges.changedFiles;
-  const deletedFiles = new Set(workingChanges.deletedFiles);
+  // 1. Get changed files — either branch-diff (if baseRef set) or working-tree-only.
+  let changedFiles: string[];
+  let deletedFiles: Set<string>;
+  let diffWindow: ReviewGraphResult["diff_window"];
+
+  if (options.baseRef) {
+    const branch = getBranchDiff(cwd, options.baseRef);
+    changedFiles = branch.changedFiles;
+    deletedFiles = new Set(branch.deletedFiles);
+    diffWindow = {
+      base_ref: options.baseRef,
+      merge_base: branch.mergeBase,
+      commits_on_branch: branch.commitsOnBranch,
+    };
+  } else {
+    const workingChanges = getWorkingChanges(cwd);
+    changedFiles = workingChanges.changedFiles;
+    deletedFiles = new Set(workingChanges.deletedFiles);
+  }
 
   if (changedFiles.length === 0 && deletedFiles.size === 0) {
     return {
       status: "ok",
-      message: "No uncommitted changes detected.",
+      message: options.baseRef
+        ? `No changes between '${options.baseRef}' and HEAD (working tree).`
+        : "No uncommitted changes detected.",
       changed_files: [],
       new_symbols: [],
       new_edges: [],
@@ -114,6 +153,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
       breaking_changes: [],
       missing_coverage: [],
       touched_node_ids: [],
+      diff_window: diffWindow,
       stats: {
         total_changed_files: 0,
         new_node_count: 0,
@@ -270,37 +310,86 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     }
   }
 
-  // 8. Breaking changes: existing nodes whose files were modified
+  // 8. Breaking changes: per-symbol AST diff so file-level edits don't pollute the report.
   const breakingChanges: ReviewGraphResult["breaking_changes"] = [];
   const touchedNodeIds: string[] = [];
+
+  interface BreakingCandidate {
+    nodeId: string;
+    existing: { symbol: string; kind: string; file: string };
+    downstreamCount: number;
+    stillExists: boolean;
+  }
+  const candidatesByFile = new Map<string, BreakingCandidate[]>();
+
   for (const [nodeId, existing] of existingNodes) {
     if (!changedTsFiles.has(existing.file)) continue;
     touchedNodeIds.push(nodeId);
-    // This existing node's file was modified — check how many things depend on it
+
     let downstreamCount = 0;
     for (const [, e] of existingEdges) {
       if (e.from_node_id === nodeId) downstreamCount++;
     }
-    // Also check fresh edges for downstream
     for (const e of freshResult.edges) {
       if (e.from === nodeId) downstreamCount++;
     }
+    if (downstreamCount === 0) continue;
 
-    // Only flag if it has downstream dependents
-    if (downstreamCount > 0) {
-      // Check if node still exists in fresh (not deleted/renamed)
-      const stillExists = freshNodeMap.has(nodeId);
-      const note = stillExists
-        ? `modified — ${downstreamCount} downstream dependents`
-        : `removed or renamed — ${downstreamCount} downstream dependents (check callers)`;
+    const list = candidatesByFile.get(existing.file) ?? [];
+    list.push({
+      nodeId,
+      existing: { symbol: existing.symbol, kind: existing.kind, file: existing.file },
+      downstreamCount,
+      stillExists: freshNodeMap.has(nodeId),
+    });
+    candidatesByFile.set(existing.file, list);
+  }
+
+  // The ref to compare against:
+  //   - kk review --base <ref>: the merge-base of <ref> and HEAD (already resolved into diffWindow)
+  //   - kk precommit (no --base): HEAD, since the diff is "working tree vs HEAD"
+  const compareRef = diffWindow?.merge_base ?? "HEAD";
+
+  resetSymbolDiffCache();
+
+  for (const [file, candidates] of candidatesByFile) {
+    const symbolNames = candidates.map((c) => c.existing.symbol);
+    const verdicts = classifyFileSymbols(cwd, compareRef, file, symbolNames);
+
+    for (const candidate of candidates) {
+      const verdict = verdicts.get(candidate.existing.symbol) ?? "unknown";
+
+      // Drop noise — symbol's text is identical between refs.
+      if (verdict === "unchanged") continue;
+      // Net-new symbols in files that didn't exist at the base are additions, not breaks.
+      // They surface elsewhere (new_symbols) — leaving them in breaking_changes would be wrong.
+      if (verdict === "added") continue;
+
+      // For unknown classifications fall back to graph state: if the node disappeared
+      // from the fresh discovery, treat it as removed_or_renamed; otherwise keep as
+      // unknown so the agent knows it couldn't be precisely classified.
+      let finalVerdict: SymbolChangeVerdict = verdict;
+      if (verdict === "unknown") {
+        finalVerdict = candidate.stillExists ? "unknown" : "removed_or_renamed";
+      }
+
+      const note =
+        finalVerdict === "signature_changed"
+          ? `signature changed — ${candidate.downstreamCount} downstream dependents (callers may break)`
+          : finalVerdict === "removed_or_renamed"
+            ? `removed or renamed — ${candidate.downstreamCount} downstream dependents (check callers)`
+            : finalVerdict === "body_changed"
+              ? `body changed — ${candidate.downstreamCount} downstream dependents (verify behavior)`
+              : `modified (couldn't AST-diff) — ${candidate.downstreamCount} downstream dependents`;
 
       breakingChanges.push({
-        node_id: nodeId,
-        symbol: existing.symbol,
-        kind: existing.kind,
-        file: existing.file,
-        downstream_count: downstreamCount,
+        node_id: candidate.nodeId,
+        symbol: candidate.existing.symbol,
+        kind: candidate.existing.kind,
+        file: candidate.existing.file,
+        downstream_count: candidate.downstreamCount,
         note,
+        verdict: finalVerdict,
       });
     }
   }
@@ -347,6 +436,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     missing_coverage: missingCoverage,
     coverage_action: coverageAction,
     touched_node_ids: touchedNodeIds,
+    diff_window: diffWindow,
     stats: {
       total_changed_files: changedFiles.length,
       new_node_count: newSymbols.length,

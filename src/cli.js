@@ -1,5 +1,5 @@
 import { handleInit } from "./init.js";
-import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleRisk, handleStatus, handleSearch, handleMemory, handlePrecommit } from "./commands.js";
+import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleStatus, handleSearch, handleMemory, handlePrecommit, handleReview } from "./commands.js";
 import { handleRebuild } from "./rebuild.js";
 import { handleDashboard } from "./dashboard/index.js";
 
@@ -13,10 +13,10 @@ Usage:
   kk downstream <symbol> [--depth N] [--json] What does this call?
   kk side-effects <symbol> [--depth N] [--json] What side effects does this trigger?
   kk why --from <symbol> --to <symbol> [--json] How are these connected?
-  kk risk [--json]                           Risk score for current git changes
   kk search <term> [--json]                   Find nodes by name
   kk status [--json]                         Show graph overview
-  kk precommit [--json]                      Pre-commit impact analysis (no persistence)
+  kk precommit [--json]                      Pre-commit impact analysis (uncommitted changes)
+  kk review [--base <ref>] [--json]          Branch-level review (committed + uncommitted vs <ref>; default main)
   kk memory <subcommand> [options]           Agent memory system (write/read/search/list/update/delete)
   kk dashboard [--port N] [--no-open]        Open the local web dashboard (precommit + impact)
   kk help                                    Show this help
@@ -27,7 +27,7 @@ Examples:
   kk upstream requireAuth --depth 2
   kk side-effects createContract --depth 4
   kk why --from createContract --to users
-  kk risk
+  kk review --base main
   kk status --json
 `;
 
@@ -57,6 +57,7 @@ const VALUE_FLAGS = new Set([
   "content",
   "limit",
   "port",
+  "base",
 ]);
 const BOOLEAN_FLAGS = new Set(["json", "enforce-confidence", "no-open"]);
 
@@ -242,7 +243,7 @@ export async function runCli(argv) {
   if (command === "downstream") return handleDownstream([subcommand, ...rest].filter(Boolean));
   if (command === "side-effects") return handleSideEffects([subcommand, ...rest].filter(Boolean));
   if (command === "why") return handleWhy([subcommand, ...rest].filter(Boolean));
-  if (command === "risk") return handleRisk([subcommand, ...rest].filter(Boolean));
+  if (command === "review") return handleReview([subcommand, ...rest].filter(Boolean));
   if (command === "search") return handleSearch([subcommand, ...rest].filter(Boolean));
   if (command === "status") return handleStatus([subcommand, ...rest].filter(Boolean));
   if (command === "precommit") return handlePrecommit([subcommand, ...rest].filter(Boolean));

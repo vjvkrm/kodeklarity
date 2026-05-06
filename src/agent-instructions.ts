@@ -11,11 +11,23 @@ Graph + memory layer. CLI or MCP (identical). Installed as devDependency (\`kode
 - \`kk_rebuild\` — update the graph to match current code
 - \`kk_impact <symbol>\` / \`kk_upstream <symbol>\` / \`kk_side_effects <symbol>\` — understand what you're about to touch (read the \`memories\` field!)
 - If \`kk_impact\` shows missing connections (e.g., server action calls a service but no service nodes appear), add a \`customBoundary\` rule in \`.kodeklarity/config.json\` matching the whole layer (not one symbol), then \`kk_rebuild --force\`
-- \`kk_risk\` on your diff — if >70, explain affected systems before proceeding
 
 **Before every commit (mandatory):**
-- \`kk_precommit\` — catches orphaned services, unwired code paths, missing table access, breaking changes, and missing tests. Fix all issues it reports before committing. If \`orphans\` are intentional (e.g., new service not wired yet), explain in the commit message.
-- If the response includes a \`coverage_action\` field, decide each listed file: add a \`customBoundary\` to \`.kodeklarity/config.json\` (it's a real boundary that should be tracked), or add the path to \`ignoreCoverage\` (it's an intentional non-boundary — entry point, type-only file, CLI dispatch, etc.). Then \`kk_init --force\` and re-run \`kk_precommit\` until it's clean. Don't claim done with uncovered files.
+- \`kk_precommit\` — analyzes UNCOMMITTED changes only (working tree). Catches orphaned services, unwired code paths, missing table access, breaking changes, and missing tests. Fix all issues it reports before committing. If \`orphans\` are intentional (e.g., new service not wired yet), explain in the commit message.
+
+**Branch / PR review:**
+- \`kk_review --base main\` (or \`kk review --base main --json\`) — analyzes ALL changes since the branch diverged from \`main\` (committed commits + uncommitted edits). Use this for self-review of a feature branch, or to review someone else's PR. Same output shape as \`kk_precommit\`, plus a \`diff_window\` field describing the merge-base and commit count.
+- \`kk_impact <symbol>\` per modified symbol if you want per-caller drill-down; cross-reference each caller's file against the diff to spot incomplete refactors.
+
+**Coverage gaps (both precommit and review):**
+- If the response includes a \`coverage_action\` field, decide each listed file: add a \`customBoundary\` to \`.kodeklarity/config.json\` (it's a real boundary that should be tracked), or add the path to \`ignoreCoverage\` (it's an intentional non-boundary — entry point, type-only file, CLI dispatch, etc.). Then \`kk_init --force\` and re-run until clean. Don't claim done with uncovered files.
+
+**Treat structural fields as risk signals (no separate score):**
+- \`breaking_changes\` non-empty → review carefully; existing callers may break
+- \`tables_touched.writes\` non-empty → confirm migration / RLS / audit
+- \`tables_touched.reads\` non-empty → be aware of consumer paths
+- \`orphans\` non-empty → unwired code, confirm intentional or fix
+- \`coverage_action\` present → fix config before claiming done
 
 **Visual exploration (optional):**
 - \`kk dashboard\` — opens a local web UI for clicking through the precommit/impact graph with diff inspection. Useful when querying by symbol is slower than seeing the layout.
