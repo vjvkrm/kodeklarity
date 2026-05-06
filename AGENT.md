@@ -32,17 +32,20 @@ kk side-effects <symbol>
 # How are these connected?
 kk why --from <symbol> --to <symbol>
 
-# Pre-commit analysis — run BEFORE every commit
+# Pre-commit analysis — uncommitted changes only
 kk precommit
 
-# Risk score for current uncommitted changes (zero-arg)
-kk risk
+# Branch / PR review — everything since branch diverged from <ref>
+kk review --base main
 
 # Find symbols by name
 kk search <term>
 
 # Graph overview
 kk status
+
+# Visual exploration — local web UI on http://127.0.0.1:4421
+kk dashboard
 
 # Agent memory — persist learnings across sessions
 kk memory write "<what you learned>" --node <symbol> --category <cat>
@@ -310,25 +313,48 @@ Explains the shortest path between two symbols in the graph.
 
 ### `kk precommit [--json]`
 
-Pre-commit impact analysis. Reads uncommitted changes (staged + unstaged + untracked), runs discovery and tracing on the working tree, and diffs against the committed graph. Nothing is persisted.
+Pre-commit analysis of **uncommitted changes only** (staged + unstaged + untracked). Runs discovery on the working tree and diffs against the committed graph. Nothing is persisted.
 
 **Reports:**
 - `new_symbols` — boundary nodes you added
 - `new_edges` — new connections from your code
 - `orphans` — new code nobody calls yet (wire them before committing)
 - `tables_touched` — which tables your changes read/write (split by READS/WRITES)
-- `breaking_changes` — modified symbols with downstream dependents
+- `breaking_changes` — existing nodes whose declaration **actually changed** at the AST level (per-symbol diff against HEAD; symbols with unchanged text are dropped). Each entry has a `verdict` field: `signature_changed` (high signal), `removed_or_renamed` (high signal), `body_changed` (medium), or `unknown`.
 - `missing_coverage` — files with no boundary nodes, symbols with no tests
+- `coverage_action` (when relevant) — structured next-step payload for an agent to update `customBoundaries` or `ignoreCoverage` and re-run
 
 **Use when:** Before every commit. Catches architecture gaps that code review misses: orphaned services, unwired code paths, missing table access patterns.
 
-**Important:** If orphans are found, wire them before committing. If breaking_changes are flagged, check the downstream callers.
+**Important:** If `orphans` are found, wire them before committing. If `breaking_changes` contains `signature_changed` or `removed_or_renamed` verdicts, audit the downstream callers explicitly. `body_changed` is medium signal — verify behavior is preserved.
 
-### `kk risk [--json]`
+### `kk review --base <ref> [--json]`
 
-Zero-arg command. Reads `git diff` of uncommitted changes and computes a risk score (0-100) based on downstream impact, side-effect reach, and graph coverage.
+**Branch-level analysis.** Same engine as `kk precommit`, but the diff window is `merge-base(<ref>, HEAD)` → working tree. Captures **all changes since the branch diverged** — committed commits + staged + unstaged.
 
-**Use when:** Quick risk check. For deeper pre-commit analysis, use `kk precommit` instead.
+Output is identical to `kk precommit` plus a top-level `diff_window` field:
+```json
+"diff_window": {
+  "base_ref": "main",
+  "merge_base": "bf02eec...",
+  "commits_on_branch": 3
+}
+```
+
+**Use when:**
+- Self-reviewing your own feature branch before opening a PR
+- Reviewing someone else's PR — everything in their branch as one report
+- Verifying a refactor's structural completeness across multiple commits
+
+**Default base** is `main`. Pass `--base origin/main` if your local main is stale, or any other ref (`HEAD~5`, `v1.0.0`, a specific SHA, etc.).
+
+**Difference from `kk precommit`:** `kk precommit` only sees uncommitted edits. Once your work is committed, precommit goes silent — `kk review --base main` is what you run instead.
+
+### `kk dashboard [--port <N>] [--no-open]`
+
+Opens a local web UI at `http://127.0.0.1:4421` (or the next free port). Two views — **Precommit** (closed set) and **Impact** (changed + 1-hop ring of callers/callees). Click any node for syntax-highlighted diff and metadata. Resizable inspector pane, light/dark theme, keyboard shortcuts (`R` refresh, `1`/`2` switch views, `/` search, `?` help). Bound to localhost only, no telemetry.
+
+**Use when:** You want to see the graph visually rather than query symbol-by-symbol. Useful for orienting yourself in unfamiliar code or showing PR impact to a teammate.
 
 ### `kk search <term> [--json]`
 
@@ -383,8 +409,8 @@ CLI works equivalently if you skip MCP — every MCP tool has a matching `kk <co
 | `kk_downstream` | What a symbol calls (auto-surfaces memories) |
 | `kk_side_effects` | DB writes, API calls, events from a symbol (auto-surfaces memories) |
 | `kk_why` | Explain connection path between two symbols |
-| `kk_precommit` | Pre-commit impact analysis (orphans, new symbols, tables, breaking changes) |
-| `kk_risk` | Risk score from current git diff |
+| `kk_precommit` | Pre-commit analysis of uncommitted changes (orphans, new symbols, tables, breaking changes with AST-level verdict, coverage_action) |
+| `kk_review` | Branch-level analysis from `merge-base(<base>, HEAD)` → working tree. Same shape as `kk_precommit` plus `diff_window`. Default base: `main`. |
 | `kk_status` | Graph overview |
 | `kk_search` | Find nodes by partial name, file, or keyword |
 | `kk_config` | Read or update config values |
@@ -555,7 +581,8 @@ KodeKlarity tracks git state for efficient rebuilds:
 - **Branch tracking:** Detects branch switches and triggers appropriate rebuilds.
 - **Incremental rebuilds:** Only re-processes changed files and their dependents, not the entire project.
 - **Skip when clean:** If the stored SHA matches HEAD and there are no working changes, `kk rebuild` skips entirely.
-- **Dirty working tree:** `kk risk` reads uncommitted changes directly from `git diff`.
+- **Dirty working tree:** `kk precommit` reads uncommitted changes directly from `git diff`.
+- **Branch state:** `kk review --base <ref>` resolves `git merge-base <ref> HEAD` and diffs from there to the working tree — covers all branch commits + uncommitted edits.
 
 Typical workflow:
 ```bash

@@ -9,7 +9,7 @@ import { traceImportEdges } from "./trace.js";
 import { traceWithTypeChecker } from "./type-tracer.js";
 import { loadConfig, saveConfig, generateDefaultConfig, mergeConfig, validateConfig } from "./config.js";
 import { getGitState } from "./git.js";
-import { compactifyTraversal, compactifyRisk, compactifyStatus, summarizeTraversal } from "./compact.js";
+import { compactifyTraversal, compactifyStatus, summarizeTraversal } from "./compact.js";
 import { fetchMemoriesForTraversal } from "./memory-helpers.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";

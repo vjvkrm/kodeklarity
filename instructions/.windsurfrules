@@ -2,38 +2,47 @@
 
 ## Code Graph (KodeKlarity)
 
-This project uses `kk` for code relationship mapping. The graph is available via MCP tools (kk_impact, kk_upstream, kk_risk, etc.) or CLI.
+This project uses `kk` for code relationship mapping. Available via MCP tools (`kk_impact`, `kk_upstream`, `kk_precommit`, `kk_review`, etc.) or CLI.
 
 ## Before making changes
 
-- Use `kk_impact` tool with the symbol name to check blast radius before modifying any function
-- Use `kk_upstream` to find all callers before changing a shared function
-- Use `kk_risk` before committing to get a risk score (0-100)
+- Use `kk_impact <symbol>` to check blast radius before modifying any function
+- Use `kk_upstream <symbol>` to find all callers before changing a shared function
+- Use `kk_side_effects <symbol>` to surface DB writes / API calls / events triggered
 
-## During code review
+## Before claiming a task done (mandatory)
 
-- Use `kk_impact` on each modified function to verify blast radius
-- Use `kk_side_effects` to check for unexpected DB writes or API calls
-- If risk label is "high" or score > 70, flag it and explain which downstream systems are affected
+- Run `kk_precommit` — analyzes UNCOMMITTED changes only. Fix every issue it reports (orphans, unwired paths, missing test files, breaking changes) before committing.
+
+## When reviewing a feature branch or PR
+
+- Run `kk_review --base main` — analyzes ALL changes since the branch diverged from `main` (committed + uncommitted). Same output shape as `kk_precommit` plus `diff_window`.
+
+## Treat structural fields as risk signals
+
+- `breaking_changes[].verdict === "signature_changed"` or `"removed_or_renamed"` → review carefully; callers may break
+- `breaking_changes[].verdict === "body_changed"` → verify behavior is preserved
+- `tables_touched.writes` non-empty → confirm migration / RLS / audit
+- `orphans` non-empty → unwired code; confirm intentional or fix
+- `coverage_action` present → fix config (`customBoundaries` or `ignoreCoverage`) before claiming done
 
 ## Understanding code flow
 
-- Use `kk_downstream` to see what a function calls
-- Use `kk_why` to trace the path between two symbols
-- Use `kk_search` to find symbols when you don't know the exact name
-- Use `kk_status` to check graph health
+- `kk_downstream <symbol>` — what this function calls
+- `kk_why --from X --to Y` — trace the path between two symbols
+- `kk_search <term>` — find symbols when you don't know the exact name
+- `kk_status` — check graph health
 
 ## When results seem wrong
 
 If kk returns 0 results when you expect connections:
 1. Run `kk_status` — check if nodes exist for the symbol
-2. If missing, the graph needs updating
-3. Read `.kodeklarity/config.json` using `kk_config` tool
-4. Edit the config to add `customBoundaries` for missing layers
-5. Run `kk_rebuild` with force=true
+2. If missing, edit `.kodeklarity/config.json` (read with `kk_config`)
+3. Add a `customBoundary` for the missing layer
+4. Run `kk_rebuild` with force=true
 
 ## Rules
 
 - Always check impact before modifying shared code
-- Always check risk before committing
+- Always run `kk_precommit` (uncommitted) or `kk_review --base main` (branch) before claiming done
 - Don't skip impact checks for "small" changes — shared code has the biggest blast radius

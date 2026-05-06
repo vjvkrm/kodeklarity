@@ -33,7 +33,7 @@ Impact chain:
 
 ### Mermaid Output (Layer 2)
 
-Generate Mermaid flowcharts from traversal data via `--mermaid` flag on `kk risk` / `kk impact`.
+Generate Mermaid flowcharts from traversal data via `--mermaid` flag on `kk review` / `kk impact`.
 
 - Cap at depth-2 (~20 nodes max) for readability
 - Works in GitHub PR descriptions, markdown renderers

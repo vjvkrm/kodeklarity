@@ -119,33 +119,6 @@ function printImpactHuman(result: any): void {
   }
 }
 
-function printRiskHuman(result: any): void {
-  if (result.status === "error") {
-    console.error(`  ${result.message}`);
-    return;
-  }
-
-  const changedFiles = result.changed_files || [];
-  console.log("");
-  console.log(`  Changed files: ${changedFiles.length}`);
-  for (const f of changedFiles.slice(0, 10)) {
-    console.log(`    ${f}`);
-  }
-  if (changedFiles.length > 10) {
-    console.log(`    ... and ${changedFiles.length - 10} more`);
-  }
-  console.log("");
-
-  const nodesAffected = result.impacted_nodes?.length || result.impact_count || 0;
-  const sideEffects = result.side_effect_count || 0;
-  const riskScore = result.risk_score ?? result.weighted_risk_score ?? "N/A";
-
-  console.log(`  Nodes affected: ${nodesAffected}`);
-  console.log(`  Side effects:   ${sideEffects}`);
-  console.log(`  Risk score:     ${riskScore}`);
-  console.log("");
-}
-
 // --- Simplified commands ---
 
 export async function handleImpact(args: string[]): Promise<number> {

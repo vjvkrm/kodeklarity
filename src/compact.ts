@@ -70,21 +70,6 @@ export function compactifyTraversal(fullResult: any): CompactResult {
   };
 }
 
-/** Transform a risk result to compact format */
-export function compactifyRisk(fullResult: any): any {
-  // Risk is already compact enough
-  return {
-    status: fullResult.status,
-    changed: fullResult.changed_file_count || fullResult.changed_files?.length || 0,
-    affected: fullResult.affected_nodes || 0,
-    impacts: fullResult.downstream_impacts || 0,
-    side_effects: fullResult.side_effect_count || 0,
-    risk: fullResult.risk_score || 0,
-    label: fullResult.risk_label || "none",
-    kinds: fullResult.impacted_kinds || {},
-  };
-}
-
 /** Transform a status result to compact format */
 export function compactifyStatus(fullResult: any): any {
   return {
