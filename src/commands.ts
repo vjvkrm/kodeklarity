@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getWorkingChanges } from "./git.js";
+import {
+  fetchMemoriesForTraversal,
+  fetchMemoriesForNodes,
+  fetchGlobalMemories,
+  printMemoriesBlock,
+  type Memory,
+} from "./memory-helpers.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
 const GLOBAL_FEATURE = "__global__";
@@ -14,6 +21,7 @@ interface CommandFlags {
   file?: string;
   from?: string;
   to?: string;
+  base?: string;
 }
 
 function parseCommandFlags(args: string[]): CommandFlags {
@@ -32,6 +40,7 @@ function parseCommandFlags(args: string[]): CommandFlags {
     if (arg === "--db-path" && args[i + 1]) { flags.dbPath = args[++i]; continue; }
     if (arg === "--from" && args[i + 1]) { flags.from = args[++i]; continue; }
     if (arg === "--to" && args[i + 1]) { flags.to = args[++i]; continue; }
+    if (arg === "--base" && args[i + 1]) { flags.base = args[++i]; continue; }
     if (!arg.startsWith("--")) { positional.push(arg); }
   }
 
@@ -90,21 +99,24 @@ function printImpactHuman(result: any): void {
   if (impacts.length === 0) {
     console.log("  No downstream impacts found.");
     console.log("");
-    return;
+  } else {
+    console.log(`  ${impacts.length} connections:`);
+    const seen = new Set<string>();
+    for (const i of impacts) {
+      const from = i.from_symbol || i.from_node_id || "?";
+      const to = i.to_symbol || i.to_node_id || "?";
+      const key = `${from}→${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const conf = i.confidence_label ? ` [${i.confidence_label}]` : "";
+      console.log(`    d=${i.depth} ${from} —${i.edge_type}→ ${to}${conf}`);
+    }
+    console.log("");
   }
 
-  console.log(`  ${impacts.length} connections:`);
-  const seen = new Set<string>();
-  for (const i of impacts) {
-    const from = i.from_symbol || i.from_node_id || "?";
-    const to = i.to_symbol || i.to_node_id || "?";
-    const key = `${from}→${to}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const conf = i.confidence_label ? ` [${i.confidence_label}]` : "";
-    console.log(`    d=${i.depth} ${from} —${i.edge_type}→ ${to}${conf}`);
+  if (result.memories && result.memories.length > 0) {
+    printMemoriesBlock(result.memories);
   }
-  console.log("");
 }
 
 function printRiskHuman(result: any): void {
@@ -151,6 +163,7 @@ export async function handleImpact(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -174,6 +187,7 @@ export async function handleUpstream(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -197,6 +211,7 @@ export async function handleDownstream(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -220,6 +235,7 @@ export async function handleSideEffects(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -244,140 +260,37 @@ export async function handleWhy(args: string[]): Promise<number> {
       to: flags.to,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, (r) => {
       const paths = r.paths || r.explanation_paths || [];
-      if (paths.length === 0) {
+      const flatSteps: any[] = Array.isArray(r.steps) ? r.steps : [];
+      const hasFlat = r.path_found && flatSteps.length > 0;
+
+      if (paths.length === 0 && !hasFlat) {
         console.log(`  No path found between ${flags.from} and ${flags.to}`);
         return;
       }
       console.log("");
-      console.log(`  ${paths.length} path(s) found:`);
-      for (const p of paths) {
-        const steps = p.steps || p.edges || [];
-        const chain = steps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+      if (hasFlat) {
+        const chain = flatSteps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+        console.log(`  Path (depth ${r.path_depth}):`);
         console.log(`    ${flags.from} → ${chain}`);
+      } else {
+        console.log(`  ${paths.length} path(s) found:`);
+        for (const p of paths) {
+          const steps = p.steps || p.edges || [];
+          const chain = steps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+          console.log(`    ${flags.from} → ${chain}`);
+        }
       }
       console.log("");
+      if (r.memories && r.memories.length > 0) {
+        printMemoriesBlock(r.memories);
+      }
     });
     return 0;
   } catch (err) {
     console.error(`Why query failed: ${err instanceof Error ? err.message : err}`);
-    return 1;
-  }
-}
-
-export async function handleRisk(args: string[]): Promise<number> {
-  const flags = parseCommandFlags(args);
-
-  // Get changed files from git (unstaged + staged + untracked)
-  const workingChanges = getWorkingChanges(process.cwd());
-  const changedFiles = workingChanges.changedFiles;
-
-  if (changedFiles.length === 0) {
-    const result = { status: "ok", message: "No changed files detected.", risk_score: 0, changed_files: [] };
-    emitResult(result, flags.json, () => console.log("  No changed files detected."));
-    return 0;
-  }
-
-  // Find which graph nodes are in changed files and trace their impact
-  try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      // Find nodes in changed files
-      const affectedNodes: any[] = [];
-      for (const file of changedFiles) {
-        const nodes = database.prepare(
-          "SELECT node_id, kind, symbol, file FROM nodes WHERE feature_name = ? AND file LIKE ?"
-        ).all(GLOBAL_FEATURE, `%${file}%`);
-        affectedNodes.push(...nodes);
-      }
-
-      // Find downstream impact of affected nodes
-      let totalImpact = 0;
-      let sideEffectCount = 0;
-      const impactedKinds: Record<string, number> = {};
-
-      for (const node of affectedNodes) {
-        const impacts = database.prepare(`
-          WITH RECURSIVE walk AS (
-            SELECT to_node_id, edge_type, 1 as depth
-            FROM edges WHERE feature_name = ? AND from_node_id = ?
-            UNION ALL
-            SELECT e.to_node_id, e.edge_type, w.depth + 1
-            FROM walk w JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
-            WHERE w.depth < 3
-          )
-          SELECT DISTINCT to_node_id, edge_type FROM walk
-        `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE);
-
-        totalImpact += impacts.length;
-        for (const imp of impacts) {
-          const targetNode = database.prepare(
-            "SELECT kind FROM nodes WHERE feature_name = ? AND node_id = ?"
-          ).get(GLOBAL_FEATURE, (imp as any).to_node_id) as any;
-          if (targetNode) {
-            impactedKinds[targetNode.kind] = (impactedKinds[targetNode.kind] || 0) + 1;
-            if (["table", "external_api", "event", "background_job"].includes(targetNode.kind)) {
-              sideEffectCount++;
-            }
-          }
-        }
-      }
-
-      // Simple risk score: 0-100
-      const nodeRatio = Math.min(affectedNodes.length / 20, 1); // up to 20 nodes = max
-      const impactRatio = Math.min(totalImpact / 100, 1); // up to 100 impacts = max
-      const sideEffectRatio = Math.min(sideEffectCount / 10, 1); // up to 10 side effects = max
-      const riskScore = Math.round((nodeRatio * 0.3 + impactRatio * 0.4 + sideEffectRatio * 0.3) * 100);
-
-      const riskLabel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
-
-      const result = {
-        status: "ok",
-        changed_files: changedFiles,
-        changed_file_count: changedFiles.length,
-        affected_nodes: affectedNodes.length,
-        downstream_impacts: totalImpact,
-        side_effect_count: sideEffectCount,
-        impacted_kinds: impactedKinds,
-        risk_score: riskScore,
-        risk_label: riskLabel,
-      };
-
-      emitResult(result, flags.json, (r) => {
-        console.log("");
-        console.log(`  Changed files: ${r.changed_file_count}`);
-        for (const f of changedFiles.slice(0, 8)) {
-          console.log(`    ${f}`);
-        }
-        if (changedFiles.length > 8) console.log(`    ... and ${changedFiles.length - 8} more`);
-        console.log("");
-        console.log(`  Affected nodes:      ${r.affected_nodes}`);
-        console.log(`  Downstream impacts:  ${r.downstream_impacts}`);
-        console.log(`  Side effects:        ${r.side_effect_count}`);
-        console.log(`  Risk score:          ${r.risk_score}/100 (${r.risk_label})`);
-
-        if (Object.keys(r.impacted_kinds).length > 0) {
-          console.log("");
-          console.log("  Impact by type:");
-          for (const [kind, count] of Object.entries(r.impacted_kinds).sort((a, b) => (b[1] as number) - (a[1] as number))) {
-            console.log(`    ${kind}: ${count}`);
-          }
-        }
-        console.log("");
-      });
-
-      return 0;
-    } finally {
-      database.close();
-    }
-  } catch (err) {
-    console.error(`Risk analysis failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }
@@ -529,87 +442,114 @@ export async function handleSearch(args: string[]): Promise<number> {
   }
 }
 
-// --- Precommit command ---
+// --- Precommit / Review commands (shared engine) ---
+
+function printReviewHuman(r: any, label: string): void {
+  if (r.message && r.stats.total_changed_files === 0) {
+    console.log(`  ${r.message}`);
+    return;
+  }
+
+  console.log("");
+  if (r.diff_window) {
+    const w = r.diff_window;
+    console.log(
+      `  ${label} - base ${w.base_ref} (merge-base ${String(w.merge_base).slice(0, 7)}, ${w.commits_on_branch} commit${w.commits_on_branch === 1 ? "" : "s"} on branch)`,
+    );
+  }
+  console.log(`  Changed files: ${r.stats.total_changed_files}`);
+  console.log("");
+
+  if (r.new_symbols.length > 0) {
+    console.log("  new_symbols:");
+    for (const s of r.new_symbols) console.log(`    ${s.symbol} (${s.kind}) - ${s.file}:${s.line}`);
+    console.log("");
+  }
+
+  if (r.new_edges.length > 0) {
+    console.log("  new_edges:");
+    for (const e of r.new_edges) console.log(`    ${e.from_symbol} -> ${e.to_symbol} (${e.edge_type})`);
+    console.log("");
+  }
+
+  if (r.orphans.length > 0) {
+    console.log("  orphans:");
+    for (const o of r.orphans) {
+      console.log(`    [orphan] ${o.symbol} (${o.kind}) - not called from any existing code path`);
+      if (o.suggestion) console.log(`      -> ${o.suggestion}`);
+    }
+    console.log("");
+  }
+
+  if (r.tables_touched.writes.length > 0 || r.tables_touched.reads.length > 0) {
+    console.log("  tables_touched:");
+    if (r.tables_touched.writes.length > 0) console.log(`    WRITES: ${r.tables_touched.writes.join(", ")}`);
+    if (r.tables_touched.reads.length > 0)  console.log(`    READS:  ${r.tables_touched.reads.join(", ")}`);
+    console.log("");
+  }
+
+  if (r.breaking_changes.length > 0) {
+    console.log("  breaking_changes:");
+    for (const b of r.breaking_changes) console.log(`    ${b.symbol} (${b.kind}) - ${b.note}`);
+    console.log("");
+  }
+
+  if (r.missing_coverage.length > 0) {
+    console.log("  missing_coverage:");
+    for (const m of r.missing_coverage) console.log(`    ? ${m}`);
+    console.log("");
+  }
+
+  if (r.memories && r.memories.length > 0) {
+    printMemoriesBlock(r.memories, "relevant_memories");
+  }
+}
+
+async function runReviewWithMemories(
+  cwd: string,
+  dbPath: string,
+  options: { baseRef?: string },
+): Promise<any> {
+  const { reviewGraph } = await import("./review-graph.js");
+  const result: any = await reviewGraph(cwd, { baseRef: options.baseRef });
+
+  const touchedNodeIds = result.touched_node_ids || [];
+  const [touchedMemories, globalMemories] = await Promise.all([
+    fetchMemoriesForNodes(dbPath, touchedNodeIds),
+    fetchGlobalMemories(dbPath, { categories: ["wiki", "decision", "warning"] }),
+  ]);
+  const seen = new Set<string>();
+  const memories: Memory[] = [];
+  for (const m of [...touchedMemories, ...globalMemories]) {
+    if (seen.has(m.memory_id)) continue;
+    seen.add(m.memory_id);
+    memories.push(m);
+  }
+  result.memories = memories;
+  return result;
+}
 
 export async function handlePrecommit(args: string[]): Promise<number> {
   const flags = parseCommandFlags(args);
-
   try {
-    const { reviewGraph } = await import("./review-graph.js");
-    const result = await reviewGraph(process.cwd());
-
-    emitResult(result, flags.json, (r) => {
-      if (r.message && r.stats.total_changed_files === 0) {
-        console.log(`  ${r.message}`);
-        return;
-      }
-
-      console.log("");
-      console.log(`  Changed files: ${r.stats.total_changed_files}`);
-      console.log("");
-
-      // New symbols
-      if (r.new_symbols.length > 0) {
-        console.log("  new_symbols:");
-        for (const s of r.new_symbols) {
-          console.log(`    ${s.symbol} (${s.kind}) — ${s.file}:${s.line}`);
-        }
-        console.log("");
-      }
-
-      // New edges
-      if (r.new_edges.length > 0) {
-        console.log("  new_edges:");
-        for (const e of r.new_edges) {
-          console.log(`    ${e.from_symbol} → ${e.to_symbol} (${e.edge_type})`);
-        }
-        console.log("");
-      }
-
-      // Orphans
-      if (r.orphans.length > 0) {
-        console.log("  orphans:");
-        for (const o of r.orphans) {
-          console.log(`    \u26A0 ${o.symbol} (${o.kind}) — not called from any existing code path`);
-          if (o.suggestion) console.log(`      \u2192 ${o.suggestion}`);
-        }
-        console.log("");
-      }
-
-      // Tables touched
-      if (r.tables_touched.writes.length > 0 || r.tables_touched.reads.length > 0) {
-        console.log("  tables_touched:");
-        if (r.tables_touched.writes.length > 0) {
-          console.log(`    WRITES: ${r.tables_touched.writes.join(", ")}`);
-        }
-        if (r.tables_touched.reads.length > 0) {
-          console.log(`    READS:  ${r.tables_touched.reads.join(", ")}`);
-        }
-        console.log("");
-      }
-
-      // Breaking changes
-      if (r.breaking_changes.length > 0) {
-        console.log("  breaking_changes:");
-        for (const b of r.breaking_changes) {
-          console.log(`    ${b.symbol} (${b.kind}) — ${b.note}`);
-        }
-        console.log("");
-      }
-
-      // Missing coverage
-      if (r.missing_coverage.length > 0) {
-        console.log("  missing_coverage:");
-        for (const m of r.missing_coverage) {
-          console.log(`    ? ${m}`);
-        }
-        console.log("");
-      }
-    });
-
+    const result = await runReviewWithMemories(process.cwd(), flags.dbPath, {});
+    emitResult(result, flags.json, (r) => printReviewHuman(r, "Precommit"));
     return 0;
   } catch (err) {
     console.error(`Precommit analysis failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+export async function handleReview(args: string[]): Promise<number> {
+  const flags = parseCommandFlags(args);
+  const baseRef = flags.base || "main";
+  try {
+    const result = await runReviewWithMemories(process.cwd(), flags.dbPath, { baseRef });
+    emitResult(result, flags.json, (r) => printReviewHuman(r, "Review"));
+    return 0;
+  } catch (err) {
+    console.error(`Review failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }
@@ -666,6 +606,7 @@ kk memory — Agent memory system
 Usage:
   kk memory write <content> [--node <symbol>] [--category <cat>] [--summary <text>] [--agent <name>]
   kk memory update <memory_id> [--content <text>] [--summary <text>] [--category <cat>]
+  kk memory delete <memory_id> [<memory_id>...] [--json]
   kk memory read [--node <symbol>] [--category <cat>]
   kk memory search <query> [--category <cat>] [--limit N]
   kk memory list [--category <cat>] [--agent <name>] [--limit N]
@@ -677,6 +618,7 @@ Categories: context, gotcha, decision, warning, wiki
 
   if (subcommand === "write") return handleMemoryWrite(rest);
   if (subcommand === "update") return handleMemoryUpdate(rest);
+  if (subcommand === "delete") return handleMemoryDelete(rest);
   if (subcommand === "read") return handleMemoryRead(rest);
   if (subcommand === "search") return handleMemorySearch(rest);
   if (subcommand === "list") return handleMemoryList(rest);
@@ -781,6 +723,67 @@ async function handleMemoryUpdate(args: string[]): Promise<number> {
     }
   } catch (err) {
     console.error(`Memory update failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryDelete(args: string[]): Promise<number> {
+  // Collect positional memory ids; respect --json and --db-path
+  const memoryIds: string[] = [];
+  let json = false;
+  let dbPath = path.join(process.cwd(), DEFAULT_DB_PATH);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") { json = true; continue; }
+    if (a === "--db-path" && args[i + 1]) { dbPath = args[++i]; continue; }
+    if (!a.startsWith("--")) memoryIds.push(a);
+  }
+
+  if (memoryIds.length === 0) {
+    console.error("Usage: kk memory delete <memory_id> [<memory_id>...] [--json]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(dbPath);
+    const database = db.openDatabase(dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const deleted: string[] = [];
+      const notFound: string[] = [];
+      const stmt = database.prepare("DELETE FROM memories WHERE memory_id = ?");
+      const tx = database.transaction((ids: string[]) => {
+        for (const id of ids) {
+          const info = stmt.run(id);
+          if (info.changes > 0) deleted.push(id);
+          else notFound.push(id);
+        }
+      });
+      tx(memoryIds);
+
+      const result = {
+        status: notFound.length === 0 ? "ok" : "partial",
+        deleted_count: deleted.length,
+        deleted,
+        not_found: notFound,
+      };
+      emitResult(result, json, (r) => {
+        if (r.deleted_count > 0) {
+          console.log(`  Deleted ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"}: ${r.deleted.join(", ")}`);
+        }
+        if (r.not_found.length > 0) {
+          console.log(`  Not found: ${r.not_found.join(", ")}`);
+        }
+      });
+      return notFound.length === memoryIds.length ? 1 : 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory delete failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }

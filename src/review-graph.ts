@@ -3,7 +3,8 @@ import { discover } from "./discover/index.js";
 import { traceImportEdges } from "./trace.js";
 import { traceWithTypeChecker } from "./type-tracer.js";
 import { loadConfig } from "./config.js";
-import { getWorkingChanges } from "./git.js";
+import { getWorkingChanges, getBranchDiff } from "./git.js";
+import { classifyFileSymbols, resetSymbolDiffCache, type SymbolChangeVerdict } from "./symbol-diff.js";
 import type { BoundaryNode, BoundaryEdge } from "./discover/types.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
@@ -46,17 +47,45 @@ export interface ReviewGraphResult {
     reads: string[];
   };
 
-  /** Existing nodes in modified files — potential breaking changes */
+  /** Existing nodes whose declaration actually changed (AST-level, not file-level). */
   breaking_changes: Array<{
+    node_id: string;
     symbol: string;
     kind: string;
     file: string;
     downstream_count: number;
     note: string;
+    /** AST-level classification — agents prioritize signature_changed and removed_or_renamed. */
+    verdict: SymbolChangeVerdict;
   }>;
 
   /** Missing coverage signals */
   missing_coverage: string[];
+
+  /** Files in `missing_coverage` that an AI agent could fix by adding customBoundaries.
+   *  Structured form of the warning, designed for agent consumption. Empty when
+   *  there's nothing actionable. */
+  coverage_action?: {
+    files: string[];
+    next_steps: string[];
+    example_boundary: {
+      name: string;
+      kind: string;
+      glob: string;
+      symbolPattern: string;
+      reason: string;
+    };
+  };
+
+  /** Node IDs of existing graph nodes whose files were modified (for memory lookup, etc.) */
+  touched_node_ids: string[];
+
+  /** When called with a baseRef (e.g. `kk review --base main`), describes the diff window. */
+  diff_window?: {
+    base_ref: string;
+    merge_base: string;
+    commits_on_branch: number;
+  };
 
   /** Summary stats */
   stats: {
@@ -70,23 +99,52 @@ export interface ReviewGraphResult {
   };
 }
 
+export interface ReviewGraphOptions {
+  /** When set, diff window is "merge-base(baseRef, HEAD) → working tree" — covers committed branch
+   *  commits + uncommitted changes. When unset, only uncommitted changes are analyzed. */
+  baseRef?: string;
+}
+
 /**
  * Run review-graph: discover the working tree, diff against the committed graph,
  * report new symbols, orphans, tables touched, and breaking changes.
  * Nothing is persisted — purely in-memory analysis.
+ *
+ * - No baseRef → working-tree-only mode (powers `kk precommit`)
+ * - baseRef set → branch-level mode (powers `kk review --base <ref>`)
  */
-export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
+export async function reviewGraph(
+  cwd: string,
+  options: ReviewGraphOptions = {},
+): Promise<ReviewGraphResult> {
   const dbPath = path.join(cwd, DEFAULT_DB_PATH);
 
-  // 1. Get changed files from git working tree
-  const workingChanges = getWorkingChanges(cwd);
-  const changedFiles = workingChanges.changedFiles;
-  const deletedFiles = new Set(workingChanges.deletedFiles);
+  // 1. Get changed files — either branch-diff (if baseRef set) or working-tree-only.
+  let changedFiles: string[];
+  let deletedFiles: Set<string>;
+  let diffWindow: ReviewGraphResult["diff_window"];
+
+  if (options.baseRef) {
+    const branch = getBranchDiff(cwd, options.baseRef);
+    changedFiles = branch.changedFiles;
+    deletedFiles = new Set(branch.deletedFiles);
+    diffWindow = {
+      base_ref: options.baseRef,
+      merge_base: branch.mergeBase,
+      commits_on_branch: branch.commitsOnBranch,
+    };
+  } else {
+    const workingChanges = getWorkingChanges(cwd);
+    changedFiles = workingChanges.changedFiles;
+    deletedFiles = new Set(workingChanges.deletedFiles);
+  }
 
   if (changedFiles.length === 0 && deletedFiles.size === 0) {
     return {
       status: "ok",
-      message: "No uncommitted changes detected.",
+      message: options.baseRef
+        ? `No changes between '${options.baseRef}' and HEAD (working tree).`
+        : "No uncommitted changes detected.",
       changed_files: [],
       new_symbols: [],
       new_edges: [],
@@ -94,6 +152,8 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
       tables_touched: { writes: [], reads: [] },
       breaking_changes: [],
       missing_coverage: [],
+      touched_node_ids: [],
+      diff_window: diffWindow,
       stats: {
         total_changed_files: 0,
         new_node_count: 0,
@@ -250,48 +310,103 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     }
   }
 
-  // 8. Breaking changes: existing nodes whose files were modified
+  // 8. Breaking changes: per-symbol AST diff so file-level edits don't pollute the report.
   const breakingChanges: ReviewGraphResult["breaking_changes"] = [];
+  const touchedNodeIds: string[] = [];
+
+  interface BreakingCandidate {
+    nodeId: string;
+    existing: { symbol: string; kind: string; file: string };
+    downstreamCount: number;
+    stillExists: boolean;
+  }
+  const candidatesByFile = new Map<string, BreakingCandidate[]>();
+
   for (const [nodeId, existing] of existingNodes) {
     if (!changedTsFiles.has(existing.file)) continue;
-    // This existing node's file was modified — check how many things depend on it
+    touchedNodeIds.push(nodeId);
+
     let downstreamCount = 0;
     for (const [, e] of existingEdges) {
       if (e.from_node_id === nodeId) downstreamCount++;
     }
-    // Also check fresh edges for downstream
     for (const e of freshResult.edges) {
       if (e.from === nodeId) downstreamCount++;
     }
+    if (downstreamCount === 0) continue;
 
-    // Only flag if it has downstream dependents
-    if (downstreamCount > 0) {
-      // Check if node still exists in fresh (not deleted/renamed)
-      const stillExists = freshNodeMap.has(nodeId);
-      const note = stillExists
-        ? `modified — ${downstreamCount} downstream dependents`
-        : `removed or renamed — ${downstreamCount} downstream dependents (check callers)`;
+    const list = candidatesByFile.get(existing.file) ?? [];
+    list.push({
+      nodeId,
+      existing: { symbol: existing.symbol, kind: existing.kind, file: existing.file },
+      downstreamCount,
+      stillExists: freshNodeMap.has(nodeId),
+    });
+    candidatesByFile.set(existing.file, list);
+  }
+
+  // The ref to compare against:
+  //   - kk review --base <ref>: the merge-base of <ref> and HEAD (already resolved into diffWindow)
+  //   - kk precommit (no --base): HEAD, since the diff is "working tree vs HEAD"
+  const compareRef = diffWindow?.merge_base ?? "HEAD";
+
+  resetSymbolDiffCache();
+
+  for (const [file, candidates] of candidatesByFile) {
+    const symbolNames = candidates.map((c) => c.existing.symbol);
+    const verdicts = classifyFileSymbols(cwd, compareRef, file, symbolNames);
+
+    for (const candidate of candidates) {
+      const verdict = verdicts.get(candidate.existing.symbol) ?? "unknown";
+
+      // Drop noise — symbol's text is identical between refs.
+      if (verdict === "unchanged") continue;
+      // Net-new symbols in files that didn't exist at the base are additions, not breaks.
+      // They surface elsewhere (new_symbols) — leaving them in breaking_changes would be wrong.
+      if (verdict === "added") continue;
+
+      // For unknown classifications fall back to graph state: if the node disappeared
+      // from the fresh discovery, treat it as removed_or_renamed; otherwise keep as
+      // unknown so the agent knows it couldn't be precisely classified.
+      let finalVerdict: SymbolChangeVerdict = verdict;
+      if (verdict === "unknown") {
+        finalVerdict = candidate.stillExists ? "unknown" : "removed_or_renamed";
+      }
+
+      const note =
+        finalVerdict === "signature_changed"
+          ? `signature changed — ${candidate.downstreamCount} downstream dependents (callers may break)`
+          : finalVerdict === "removed_or_renamed"
+            ? `removed or renamed — ${candidate.downstreamCount} downstream dependents (check callers)`
+            : finalVerdict === "body_changed"
+              ? `body changed — ${candidate.downstreamCount} downstream dependents (verify behavior)`
+              : `modified (couldn't AST-diff) — ${candidate.downstreamCount} downstream dependents`;
 
       breakingChanges.push({
-        symbol: existing.symbol,
-        kind: existing.kind,
-        file: existing.file,
-        downstream_count: downstreamCount,
+        node_id: candidate.nodeId,
+        symbol: candidate.existing.symbol,
+        kind: candidate.existing.kind,
+        file: candidate.existing.file,
+        downstream_count: candidate.downstreamCount,
         note,
+        verdict: finalVerdict,
       });
     }
   }
 
   // 9. Missing coverage signals
   const missingCoverage: string[] = [];
+  const ignorePatterns = config?.ignoreCoverage ?? [];
+  const isIgnored = (f: string) => ignorePatterns.some((p) => path.matchesGlob(f, p));
 
   // Check for new files not covered by any adapter
+  const uncoveredFiles: string[] = [];
   for (const file of changedTsFiles) {
     const hasNode = freshResult.nodes.some((n) => n.file === file);
-    if (!hasNode && !file.includes("test") && !file.includes("spec") && !file.includes(".d.ts")) {
+    if (!hasNode && !file.includes("test") && !file.includes("spec") && !file.includes(".d.ts") && !isIgnored(file)) {
       // File has no boundary nodes — might need customBoundaries config
-      const dir = path.dirname(file);
       missingCoverage.push(`${file} — no boundary nodes detected (add to customBoundaries?)`);
+      uncoveredFiles.push(file);
     }
   }
 
@@ -305,6 +420,8 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     }
   }
 
+  const coverageAction = uncoveredFiles.length > 0 ? buildCoverageAction(uncoveredFiles) : undefined;
+
   return {
     status: "ok",
     changed_files: changedFiles,
@@ -317,6 +434,9 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     },
     breaking_changes: breakingChanges,
     missing_coverage: missingCoverage,
+    coverage_action: coverageAction,
+    touched_node_ids: touchedNodeIds,
+    diff_window: diffWindow,
     stats: {
       total_changed_files: changedFiles.length,
       new_node_count: newSymbols.length,
@@ -325,6 +445,38 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
       tables_write_count: tablesWritten.size,
       tables_read_count: tablesRead.size,
       breaking_change_count: breakingChanges.length,
+    },
+  };
+}
+
+/**
+ * Suggest a customBoundary entry to an AI agent. Picks the longest common
+ * directory prefix as the glob target so the example is concrete and copy-pasteable.
+ */
+function buildCoverageAction(uncoveredFiles: string[]): NonNullable<ReviewGraphResult["coverage_action"]> {
+  const dirs = uncoveredFiles.map((f) => path.dirname(f));
+  // Common prefix across all dirs
+  let common = dirs[0];
+  for (const d of dirs.slice(1)) {
+    while (!d.startsWith(common) && common.length > 0) {
+      common = common.slice(0, common.lastIndexOf("/"));
+    }
+  }
+  const prefix = common || "src";
+  return {
+    files: uncoveredFiles,
+    next_steps: [
+      `Open .kodeklarity/config.json and add an entry to "customBoundaries" for the relevant pattern.`,
+      `Or add the file glob to "ignoreCoverage" if it is intentionally not a boundary (e.g. types-only files, bootstrap entries, CLI dispatch).`,
+      `Run "kk init --force" to rebuild the graph.`,
+      `Re-run the previous query (precommit/impact) to confirm coverage.`,
+    ],
+    example_boundary: {
+      name: "my_boundary",
+      kind: "service",
+      glob: `${prefix}/**/*.ts`,
+      symbolPattern: "^export\\s+(async\\s+)?function\\s+",
+      reason: "Describe what this group of files does",
     },
   };
 }

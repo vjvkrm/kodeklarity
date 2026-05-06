@@ -47,8 +47,14 @@ export interface KKConfig {
   // Custom boundary patterns — the power feature for agents
   customBoundaries: CustomBoundary[];
 
-  // Global exclude patterns
+  // Global exclude patterns (files never scanned at all)
   exclude: string[];
+
+  // Glob patterns for files that *should* be silent in `missing_coverage` —
+  // bootstrap entries, CLI dispatch tables, pure type-only files, etc.
+  // Unlike `exclude`, these files still appear in diffs and tracing; only the
+  // "no boundary nodes detected" warning is suppressed.
+  ignoreCoverage: string[];
 
   // Custom edge type rules
   edgeRules: EdgeRule[];
@@ -131,6 +137,7 @@ export function generateDefaultConfig(result: DiscoveryResult): KKConfig {
       "scripts/**",
       "__tests__/**",
     ],
+    ignoreCoverage: [],
     edgeRules: [],
     importAliases: {},
     trace: {
@@ -183,6 +190,7 @@ export function mergeConfig(existing: KKConfig, freshDetection: KKConfig): KKCon
     // Keep all agent customizations
     customBoundaries: existing.customBoundaries,
     exclude: existing.exclude,
+    ignoreCoverage: existing.ignoreCoverage ?? [],
     edgeRules: existing.edgeRules,
     importAliases: existing.importAliases,
     trace: existing.trace,
