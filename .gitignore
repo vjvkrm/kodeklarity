@@ -1,7 +1,14 @@
 node_modules/
-.kodeklarity/
+# .kodeklarity/config.json is committed (project-level customBoundaries / ignore rules).
+# The graph DB and per-machine artefacts under it stay local.
+.kodeklarity/index/
+.kodeklarity/AGENT.md
+.kodeklarity/cache/
 .claude/
+.vscode/
+.idea/
 dist/
 .DS_Store
+*.tgz
 README-TRACKING.md
 TASKS.md

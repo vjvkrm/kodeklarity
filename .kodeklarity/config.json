@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "stack": {
+    "detected": [
+      "react",
+      "generic"
+    ],
+    "enabled": [
+      "react",
+      "generic"
+    ],
+    "disabled": []
+  },
+  "workspaces": {},
+  "customBoundaries": [
+    {
+      "name": "kk_core",
+      "kind": "service",
+      "glob": "src/*.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "kk core source module (top-level src/*.ts)"
+    },
+    {
+      "name": "dashboard_command",
+      "kind": "command",
+      "glob": "src/dashboard/index.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+handle",
+      "reason": "kk dashboard CLI entry point"
+    },
+    {
+      "name": "dashboard_server",
+      "kind": "service",
+      "glob": "src/dashboard/server.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+startDashboard",
+      "reason": "Dashboard HTTP server entry"
+    },
+    {
+      "name": "dashboard_route",
+      "kind": "api_route",
+      "glob": "src/dashboard/routes/*.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+handle",
+      "reason": "Dashboard HTTP route handler"
+    },
+    {
+      "name": "dashboard_security",
+      "kind": "service",
+      "glob": "src/dashboard/security.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "Dashboard security primitive (host check, sanitization, CSP)"
+    },
+    {
+      "name": "dashboard_static",
+      "kind": "service",
+      "glob": "src/dashboard/static.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "Dashboard static SPA serving"
+    },
+    {
+      "name": "dashboard_aggregator",
+      "kind": "service",
+      "glob": "src/dashboard/impact-aggregator.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+build",
+      "reason": "Dashboard graph aggregation (precommit + impact data shape)"
+    },
+    {
+      "name": "ui_component",
+      "kind": "component",
+      "glob": "src/dashboard/web/src/**/*.tsx",
+      "symbolPattern": "^export\\s+(default\\s+)?function",
+      "reason": "Dashboard React component (default or named export)"
+    },
+    {
+      "name": "ui_helper",
+      "kind": "service",
+      "glob": "src/dashboard/web/src/components/**/*.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "Dashboard component helper (layout, etc.)"
+    },
+    {
+      "name": "ui_state_store",
+      "kind": "store",
+      "glob": "src/dashboard/web/src/state/*.ts",
+      "symbolPattern": "^export\\s+const\\s+use",
+      "reason": "Dashboard zustand state store"
+    },
+    {
+      "name": "ui_api_client",
+      "kind": "api_client",
+      "glob": "src/dashboard/web/src/api/client.ts",
+      "symbolPattern": "^export\\s+const\\s+api",
+      "reason": "Dashboard typed API client"
+    }
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.test.tsx",
+    "**/*.spec.tsx",
+    "tests/**",
+    "scripts/**",
+    "__tests__/**"
+  ],
+  "ignoreCoverage": [
+    "src/cli.js",
+    "src/dashboard/web/src/api/types.ts",
+    "src/dashboard/web/src/main.tsx"
+  ],
+  "edgeRules": [],
+  "importAliases": {},
+  "trace": {
+    "maxDepth": 4,
+    "excludeTypeOnlyImports": true
+  },
+  "_meta": {
+    "generatedAt": "2026-05-06T13:36:03.944Z",
+    "lastModifiedBy": "kk_init",
+    "projectName": "kodeklarity"
+  }
+}

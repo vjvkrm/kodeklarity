@@ -16,5 +16,5 @@
     "checkJs": false
   },
   "include": ["src/**/*", "bin/**/*"],
-  "exclude": ["node_modules", "dist/**/*", "examples", "tests"]
+  "exclude": ["node_modules", "dist/**/*", "examples", "tests", "src/dashboard/web/**"]
 }

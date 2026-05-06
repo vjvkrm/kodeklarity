@@ -15,6 +15,10 @@ Graph + memory layer. CLI or MCP (identical). Installed as devDependency (\`kode
 
 **Before every commit (mandatory):**
 - \`kk_precommit\` — catches orphaned services, unwired code paths, missing table access, breaking changes, and missing tests. Fix all issues it reports before committing. If \`orphans\` are intentional (e.g., new service not wired yet), explain in the commit message.
+- If the response includes a \`coverage_action\` field, decide each listed file: add a \`customBoundary\` to \`.kodeklarity/config.json\` (it's a real boundary that should be tracked), or add the path to \`ignoreCoverage\` (it's an intentional non-boundary — entry point, type-only file, CLI dispatch, etc.). Then \`kk_init --force\` and re-run \`kk_precommit\` until it's clean. Don't claim done with uncovered files.
+
+**Visual exploration (optional):**
+- \`kk dashboard\` — opens a local web UI for clicking through the precommit/impact graph with diff inspection. Useful when querying by symbol is slower than seeing the layout.
 
 **Memory discipline:**
 - When you change a function's behavior, check \`kk_memory_read <symbol>\` — if there's a stale memory, update or remove it via \`kk_memory_update\`.

@@ -59,6 +59,21 @@ export interface ReviewGraphResult {
   /** Missing coverage signals */
   missing_coverage: string[];
 
+  /** Files in `missing_coverage` that an AI agent could fix by adding customBoundaries.
+   *  Structured form of the warning, designed for agent consumption. Empty when
+   *  there's nothing actionable. */
+  coverage_action?: {
+    files: string[];
+    next_steps: string[];
+    example_boundary: {
+      name: string;
+      kind: string;
+      glob: string;
+      symbolPattern: string;
+      reason: string;
+    };
+  };
+
   /** Node IDs of existing graph nodes whose files were modified (for memory lookup, etc.) */
   touched_node_ids: string[];
 
@@ -292,14 +307,17 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
 
   // 9. Missing coverage signals
   const missingCoverage: string[] = [];
+  const ignorePatterns = config?.ignoreCoverage ?? [];
+  const isIgnored = (f: string) => ignorePatterns.some((p) => path.matchesGlob(f, p));
 
   // Check for new files not covered by any adapter
+  const uncoveredFiles: string[] = [];
   for (const file of changedTsFiles) {
     const hasNode = freshResult.nodes.some((n) => n.file === file);
-    if (!hasNode && !file.includes("test") && !file.includes("spec") && !file.includes(".d.ts")) {
+    if (!hasNode && !file.includes("test") && !file.includes("spec") && !file.includes(".d.ts") && !isIgnored(file)) {
       // File has no boundary nodes — might need customBoundaries config
-      const dir = path.dirname(file);
       missingCoverage.push(`${file} — no boundary nodes detected (add to customBoundaries?)`);
+      uncoveredFiles.push(file);
     }
   }
 
@@ -313,6 +331,8 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     }
   }
 
+  const coverageAction = uncoveredFiles.length > 0 ? buildCoverageAction(uncoveredFiles) : undefined;
+
   return {
     status: "ok",
     changed_files: changedFiles,
@@ -325,6 +345,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     },
     breaking_changes: breakingChanges,
     missing_coverage: missingCoverage,
+    coverage_action: coverageAction,
     touched_node_ids: touchedNodeIds,
     stats: {
       total_changed_files: changedFiles.length,
@@ -334,6 +355,38 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
       tables_write_count: tablesWritten.size,
       tables_read_count: tablesRead.size,
       breaking_change_count: breakingChanges.length,
+    },
+  };
+}
+
+/**
+ * Suggest a customBoundary entry to an AI agent. Picks the longest common
+ * directory prefix as the glob target so the example is concrete and copy-pasteable.
+ */
+function buildCoverageAction(uncoveredFiles: string[]): NonNullable<ReviewGraphResult["coverage_action"]> {
+  const dirs = uncoveredFiles.map((f) => path.dirname(f));
+  // Common prefix across all dirs
+  let common = dirs[0];
+  for (const d of dirs.slice(1)) {
+    while (!d.startsWith(common) && common.length > 0) {
+      common = common.slice(0, common.lastIndexOf("/"));
+    }
+  }
+  const prefix = common || "src";
+  return {
+    files: uncoveredFiles,
+    next_steps: [
+      `Open .kodeklarity/config.json and add an entry to "customBoundaries" for the relevant pattern.`,
+      `Or add the file glob to "ignoreCoverage" if it is intentionally not a boundary (e.g. types-only files, bootstrap entries, CLI dispatch).`,
+      `Run "kk init --force" to rebuild the graph.`,
+      `Re-run the previous query (precommit/impact) to confirm coverage.`,
+    ],
+    example_boundary: {
+      name: "my_boundary",
+      kind: "service",
+      glob: `${prefix}/**/*.ts`,
+      symbolPattern: "^export\\s+(async\\s+)?function\\s+",
+      reason: "Describe what this group of files does",
     },
   };
 }

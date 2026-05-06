@@ -1,6 +1,7 @@
 import { handleInit } from "./init.js";
 import { handleImpact, handleUpstream, handleDownstream, handleSideEffects, handleWhy, handleRisk, handleStatus, handleSearch, handleMemory, handlePrecommit } from "./commands.js";
 import { handleRebuild } from "./rebuild.js";
+import { handleDashboard } from "./dashboard/index.js";
 
 const HELP_TEXT = `kk — KodeKlarity code graph for AI agents
 
@@ -17,6 +18,7 @@ Usage:
   kk status [--json]                         Show graph overview
   kk precommit [--json]                      Pre-commit impact analysis (no persistence)
   kk memory <subcommand> [options]           Agent memory system (write/read/search/list/update/delete)
+  kk dashboard [--port N] [--no-open]        Open the local web dashboard (precommit + impact)
   kk help                                    Show this help
 
 Examples:
@@ -54,8 +56,9 @@ const VALUE_FLAGS = new Set([
   "agent",
   "content",
   "limit",
+  "port",
 ]);
-const BOOLEAN_FLAGS = new Set(["json", "enforce-confidence"]);
+const BOOLEAN_FLAGS = new Set(["json", "enforce-confidence", "no-open"]);
 
 function parseArgs(args) {
   const positional = [];
@@ -244,6 +247,7 @@ export async function runCli(argv) {
   if (command === "status") return handleStatus([subcommand, ...rest].filter(Boolean));
   if (command === "precommit") return handlePrecommit([subcommand, ...rest].filter(Boolean));
   if (command === "memory") return handleMemory([subcommand, ...rest].filter(Boolean));
+  if (command === "dashboard") return handleDashboard([subcommand, ...rest].filter(Boolean));
 
   console.error(`Unknown command: ${command}`);
   console.log(HELP_TEXT);
