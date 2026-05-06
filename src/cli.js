@@ -16,7 +16,7 @@ Usage:
   kk search <term> [--json]                   Find nodes by name
   kk status [--json]                         Show graph overview
   kk precommit [--json]                      Pre-commit impact analysis (no persistence)
-  kk memory <subcommand> [options]           Agent memory system
+  kk memory <subcommand> [options]           Agent memory system (write/read/search/list/update/delete)
   kk help                                    Show this help
 
 Examples:

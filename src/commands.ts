@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getWorkingChanges } from "./git.js";
+import {
+  fetchMemoriesForTraversal,
+  fetchMemoriesForNodes,
+  fetchGlobalMemories,
+  printMemoriesBlock,
+  type Memory,
+} from "./memory-helpers.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
 const GLOBAL_FEATURE = "__global__";
@@ -90,21 +97,24 @@ function printImpactHuman(result: any): void {
   if (impacts.length === 0) {
     console.log("  No downstream impacts found.");
     console.log("");
-    return;
+  } else {
+    console.log(`  ${impacts.length} connections:`);
+    const seen = new Set<string>();
+    for (const i of impacts) {
+      const from = i.from_symbol || i.from_node_id || "?";
+      const to = i.to_symbol || i.to_node_id || "?";
+      const key = `${from}→${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const conf = i.confidence_label ? ` [${i.confidence_label}]` : "";
+      console.log(`    d=${i.depth} ${from} —${i.edge_type}→ ${to}${conf}`);
+    }
+    console.log("");
   }
 
-  console.log(`  ${impacts.length} connections:`);
-  const seen = new Set<string>();
-  for (const i of impacts) {
-    const from = i.from_symbol || i.from_node_id || "?";
-    const to = i.to_symbol || i.to_node_id || "?";
-    const key = `${from}→${to}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const conf = i.confidence_label ? ` [${i.confidence_label}]` : "";
-    console.log(`    d=${i.depth} ${from} —${i.edge_type}→ ${to}${conf}`);
+  if (result.memories && result.memories.length > 0) {
+    printMemoriesBlock(result.memories);
   }
-  console.log("");
 }
 
 function printRiskHuman(result: any): void {
@@ -151,6 +161,7 @@ export async function handleImpact(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -174,6 +185,7 @@ export async function handleUpstream(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -197,6 +209,7 @@ export async function handleDownstream(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -220,6 +233,7 @@ export async function handleSideEffects(args: string[]): Promise<number> {
       symbol: flags.symbol,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, printImpactHuman);
     return 0;
   } catch (err) {
@@ -244,20 +258,33 @@ export async function handleWhy(args: string[]): Promise<number> {
       to: flags.to,
       depth: flags.depth,
     });
+    (result as any).memories = await fetchMemoriesForTraversal(flags.dbPath, result);
     emitResult(result, flags.json, (r) => {
       const paths = r.paths || r.explanation_paths || [];
-      if (paths.length === 0) {
+      const flatSteps: any[] = Array.isArray(r.steps) ? r.steps : [];
+      const hasFlat = r.path_found && flatSteps.length > 0;
+
+      if (paths.length === 0 && !hasFlat) {
         console.log(`  No path found between ${flags.from} and ${flags.to}`);
         return;
       }
       console.log("");
-      console.log(`  ${paths.length} path(s) found:`);
-      for (const p of paths) {
-        const steps = p.steps || p.edges || [];
-        const chain = steps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+      if (hasFlat) {
+        const chain = flatSteps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+        console.log(`  Path (depth ${r.path_depth}):`);
         console.log(`    ${flags.from} → ${chain}`);
+      } else {
+        console.log(`  ${paths.length} path(s) found:`);
+        for (const p of paths) {
+          const steps = p.steps || p.edges || [];
+          const chain = steps.map((s: any) => s.to_symbol || s.to_node_id).join(" → ");
+          console.log(`    ${flags.from} → ${chain}`);
+        }
       }
       console.log("");
+      if (r.memories && r.memories.length > 0) {
+        printMemoriesBlock(r.memories);
+      }
     });
     return 0;
   } catch (err) {
@@ -337,6 +364,23 @@ export async function handleRisk(args: string[]): Promise<number> {
 
       const riskLabel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
 
+      const memoryNodeIds = new Set<string>(affectedNodes.map((n: any) => n.node_id));
+      // Also include impacted (downstream) nodes so memories on indirectly-affected nodes surface
+      for (const node of affectedNodes) {
+        const impacts = database.prepare(`
+          WITH RECURSIVE walk AS (
+            SELECT to_node_id, 1 as depth FROM edges WHERE feature_name = ? AND from_node_id = ?
+            UNION ALL
+            SELECT e.to_node_id, w.depth + 1 FROM walk w
+            JOIN edges e ON e.feature_name = ? AND e.from_node_id = w.to_node_id
+            WHERE w.depth < 3
+          )
+          SELECT DISTINCT to_node_id FROM walk
+        `).all(GLOBAL_FEATURE, node.node_id, GLOBAL_FEATURE) as Array<{ to_node_id: string }>;
+        for (const i of impacts) memoryNodeIds.add(i.to_node_id);
+      }
+      const memories = await fetchMemoriesForNodes(flags.dbPath, memoryNodeIds);
+
       const result = {
         status: "ok",
         changed_files: changedFiles,
@@ -347,6 +391,7 @@ export async function handleRisk(args: string[]): Promise<number> {
         impacted_kinds: impactedKinds,
         risk_score: riskScore,
         risk_label: riskLabel,
+        memories,
       };
 
       emitResult(result, flags.json, (r) => {
@@ -370,6 +415,9 @@ export async function handleRisk(args: string[]): Promise<number> {
           }
         }
         console.log("");
+        if (r.memories && r.memories.length > 0) {
+          printMemoriesBlock(r.memories);
+        }
       });
 
       return 0;
@@ -536,7 +584,23 @@ export async function handlePrecommit(args: string[]): Promise<number> {
 
   try {
     const { reviewGraph } = await import("./review-graph.js");
-    const result = await reviewGraph(process.cwd());
+    const result: any = await reviewGraph(process.cwd());
+
+    // Surface memories on existing nodes touched by this change + global wiki/decision memories.
+    const touchedNodeIds = result.touched_node_ids || [];
+    const [touchedMemories, globalMemories] = await Promise.all([
+      fetchMemoriesForNodes(flags.dbPath, touchedNodeIds),
+      fetchGlobalMemories(flags.dbPath, { categories: ["wiki", "decision", "warning"] }),
+    ]);
+    // De-dup by memory_id (a node memory could also match globals if categories changed)
+    const seen = new Set<string>();
+    const memories: Memory[] = [];
+    for (const m of [...touchedMemories, ...globalMemories]) {
+      if (seen.has(m.memory_id)) continue;
+      seen.add(m.memory_id);
+      memories.push(m);
+    }
+    result.memories = memories;
 
     emitResult(result, flags.json, (r) => {
       if (r.message && r.stats.total_changed_files === 0) {
@@ -605,6 +669,11 @@ export async function handlePrecommit(args: string[]): Promise<number> {
         }
         console.log("");
       }
+
+      // Relevant memories (touched nodes + global wiki/decision)
+      if (r.memories && r.memories.length > 0) {
+        printMemoriesBlock(r.memories, "relevant_memories");
+      }
     });
 
     return 0;
@@ -666,6 +735,7 @@ kk memory — Agent memory system
 Usage:
   kk memory write <content> [--node <symbol>] [--category <cat>] [--summary <text>] [--agent <name>]
   kk memory update <memory_id> [--content <text>] [--summary <text>] [--category <cat>]
+  kk memory delete <memory_id> [<memory_id>...] [--json]
   kk memory read [--node <symbol>] [--category <cat>]
   kk memory search <query> [--category <cat>] [--limit N]
   kk memory list [--category <cat>] [--agent <name>] [--limit N]
@@ -677,6 +747,7 @@ Categories: context, gotcha, decision, warning, wiki
 
   if (subcommand === "write") return handleMemoryWrite(rest);
   if (subcommand === "update") return handleMemoryUpdate(rest);
+  if (subcommand === "delete") return handleMemoryDelete(rest);
   if (subcommand === "read") return handleMemoryRead(rest);
   if (subcommand === "search") return handleMemorySearch(rest);
   if (subcommand === "list") return handleMemoryList(rest);
@@ -781,6 +852,67 @@ async function handleMemoryUpdate(args: string[]): Promise<number> {
     }
   } catch (err) {
     console.error(`Memory update failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryDelete(args: string[]): Promise<number> {
+  // Collect positional memory ids; respect --json and --db-path
+  const memoryIds: string[] = [];
+  let json = false;
+  let dbPath = path.join(process.cwd(), DEFAULT_DB_PATH);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") { json = true; continue; }
+    if (a === "--db-path" && args[i + 1]) { dbPath = args[++i]; continue; }
+    if (!a.startsWith("--")) memoryIds.push(a);
+  }
+
+  if (memoryIds.length === 0) {
+    console.error("Usage: kk memory delete <memory_id> [<memory_id>...] [--json]");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(dbPath);
+    const database = db.openDatabase(dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const deleted: string[] = [];
+      const notFound: string[] = [];
+      const stmt = database.prepare("DELETE FROM memories WHERE memory_id = ?");
+      const tx = database.transaction((ids: string[]) => {
+        for (const id of ids) {
+          const info = stmt.run(id);
+          if (info.changes > 0) deleted.push(id);
+          else notFound.push(id);
+        }
+      });
+      tx(memoryIds);
+
+      const result = {
+        status: notFound.length === 0 ? "ok" : "partial",
+        deleted_count: deleted.length,
+        deleted,
+        not_found: notFound,
+      };
+      emitResult(result, json, (r) => {
+        if (r.deleted_count > 0) {
+          console.log(`  Deleted ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"}: ${r.deleted.join(", ")}`);
+        }
+        if (r.not_found.length > 0) {
+          console.log(`  Not found: ${r.not_found.join(", ")}`);
+        }
+      });
+      return notFound.length === memoryIds.length ? 1 : 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory delete failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }

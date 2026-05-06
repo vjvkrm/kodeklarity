@@ -1,15 +1,21 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE_PATH = path.join(__dirname, "fixtures", "nextjs-drizzle-app");
+const SOURCE_FIXTURE = path.join(__dirname, "fixtures", "nextjs-drizzle-app");
 // Use the built bin — matches what users install via npm.
 // npm test runs `npm run build` first, so dist/ is guaranteed fresh.
 const KK_BIN = path.join(__dirname, "..", "dist", "bin", "kk.js");
+
+// Copy the fixture to a tmp dir so this test cannot race other test files that
+// may also operate on tests/fixtures/nextjs-drizzle-app (node:test runs files
+// in parallel by default).
+let FIXTURE_PATH;
 
 function kk(args, cwd = FIXTURE_PATH) {
   try {
@@ -33,17 +39,17 @@ function kkJson(args, cwd = FIXTURE_PATH) {
   }
 }
 
-// Cleanup before tests
 before(async () => {
-  try {
-    await fs.rm(path.join(FIXTURE_PATH, ".kodeklarity"), { recursive: true, force: true });
-  } catch { /* doesn't exist yet */ }
+  FIXTURE_PATH = await fs.mkdtemp(path.join(os.tmpdir(), "kk-e2e-"));
+  await fs.cp(SOURCE_FIXTURE, FIXTURE_PATH, { recursive: true });
+  // Drop any committed .kodeklarity from the source fixture so we start clean.
+  await fs.rm(path.join(FIXTURE_PATH, ".kodeklarity"), { recursive: true, force: true }).catch(() => {});
 });
 
 after(async () => {
-  try {
-    await fs.rm(path.join(FIXTURE_PATH, ".kodeklarity"), { recursive: true, force: true });
-  } catch { /* cleanup */ }
+  if (FIXTURE_PATH) {
+    await fs.rm(FIXTURE_PATH, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 describe("e2e: kk init", () => {

@@ -1,0 +1,34 @@
+# NOTE: package.json `files` is the primary allowlist (only ships dist/**/*.js,
+# README.md, AGENT.md, LICENSE). This file is defense-in-depth: if a future
+# maintainer broadens `files`, these paths still won't ship.
+
+# Local kk graph + memory store (must stay on the developer's machine)
+.kodeklarity/
+
+# Tests + fixtures
+tests/
+__tests__/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+
+# Source (only built dist/ ships)
+src/
+bin/
+tsconfig.json
+
+# Editor / build artefacts
+.claude/
+.vscode/
+.idea/
+.DS_Store
+
+# Project-internal docs
+TASKS.md
+CHANGELOG.md
+FEATURES.md
+MARKETING.md
+CLAUDE.md
+instructions/
+examples/

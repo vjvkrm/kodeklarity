@@ -48,6 +48,7 @@ export interface ReviewGraphResult {
 
   /** Existing nodes in modified files — potential breaking changes */
   breaking_changes: Array<{
+    node_id: string;
     symbol: string;
     kind: string;
     file: string;
@@ -57,6 +58,9 @@ export interface ReviewGraphResult {
 
   /** Missing coverage signals */
   missing_coverage: string[];
+
+  /** Node IDs of existing graph nodes whose files were modified (for memory lookup, etc.) */
+  touched_node_ids: string[];
 
   /** Summary stats */
   stats: {
@@ -94,6 +98,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
       tables_touched: { writes: [], reads: [] },
       breaking_changes: [],
       missing_coverage: [],
+      touched_node_ids: [],
       stats: {
         total_changed_files: 0,
         new_node_count: 0,
@@ -252,8 +257,10 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
 
   // 8. Breaking changes: existing nodes whose files were modified
   const breakingChanges: ReviewGraphResult["breaking_changes"] = [];
+  const touchedNodeIds: string[] = [];
   for (const [nodeId, existing] of existingNodes) {
     if (!changedTsFiles.has(existing.file)) continue;
+    touchedNodeIds.push(nodeId);
     // This existing node's file was modified — check how many things depend on it
     let downstreamCount = 0;
     for (const [, e] of existingEdges) {
@@ -273,6 +280,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
         : `removed or renamed — ${downstreamCount} downstream dependents (check callers)`;
 
       breakingChanges.push({
+        node_id: nodeId,
         symbol: existing.symbol,
         kind: existing.kind,
         file: existing.file,
@@ -317,6 +325,7 @@ export async function reviewGraph(cwd: string): Promise<ReviewGraphResult> {
     },
     breaking_changes: breakingChanges,
     missing_coverage: missingCoverage,
+    touched_node_ids: touchedNodeIds,
     stats: {
       total_changed_files: changedFiles.length,
       new_node_count: newSymbols.length,
