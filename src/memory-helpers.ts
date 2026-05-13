@@ -15,6 +15,11 @@ export interface Memory {
   content: string;
   summary: string | null;
   updated_at: string;
+  symbol_path?: string | null;
+  stale?: number;
+  stale_reason?: string | null;
+  last_validated_commit_sha?: string | null;
+  scope?: string;
 }
 
 async function withDb<T>(dbPath: string, fn: (database: any) => T): Promise<T | null> {
@@ -80,7 +85,8 @@ export async function fetchMemoriesForNodes(dbPath: string, nodeIds: Iterable<st
   const result = await withDb(dbPath, (database) => {
     const placeholders = ids.map(() => "?").join(",");
     return database.prepare(
-      `SELECT memory_id, node_id, agent, category, content, summary, updated_at
+      `SELECT memory_id, node_id, agent, category, content, summary, updated_at,
+              symbol_path, stale, stale_reason, last_validated_commit_sha, scope
        FROM memories WHERE node_id IN (${placeholders}) ORDER BY updated_at DESC`
     ).all(...ids) as Memory[];
   });
@@ -104,13 +110,15 @@ export async function fetchGlobalMemories(
     if (cats && cats.length > 0) {
       const placeholders = cats.map(() => "?").join(",");
       return database.prepare(
-        `SELECT memory_id, node_id, agent, category, content, summary, updated_at
+        `SELECT memory_id, node_id, agent, category, content, summary, updated_at,
+                symbol_path, stale, stale_reason, last_validated_commit_sha, scope
          FROM memories WHERE node_id IS NULL AND edge_id IS NULL AND category IN (${placeholders})
          ORDER BY updated_at DESC LIMIT ?`
       ).all(...cats, limit) as Memory[];
     }
     return database.prepare(
-      `SELECT memory_id, node_id, agent, category, content, summary, updated_at
+      `SELECT memory_id, node_id, agent, category, content, summary, updated_at,
+              symbol_path, stale, stale_reason, last_validated_commit_sha, scope
        FROM memories WHERE node_id IS NULL AND edge_id IS NULL
        ORDER BY updated_at DESC LIMIT ?`
     ).all(limit) as Memory[];

@@ -40,6 +40,20 @@ Graph + memory layer. CLI or MCP (identical). Installed as devDependency (\`kode
 - Categories: \`gotcha\`, \`decision\`, \`warning\`, \`wiki\` (rare). Worth writing: hidden DB constraints, load-bearing ordering, intentional-looking-like-bug. Not worth: "fixed X", restating code.
 - Remove stale memories — if a memory references a deleted function or changed behavior, delete it. Code and memory must stay consistent.
 
+**Writing memory effectively:**
+- **Anchor whenever possible.** Pass \`symbol\` to \`kk_memory_write\` (CLI: \`--node <symbol>\`). Anchored memories survive refactors via the re-anchor pass; un-anchored memories don't. If a symbol could plausibly own the memory, use it.
+- **Pick the right category:**
+  - \`gotcha\` — non-obvious thing to watch out for ("retries 3x because upstream rate-limits at 100rpm")
+  - \`decision\` — why something is the way it is ("chose Drizzle over Prisma because of edge-runtime support")
+  - \`warning\` — fragile or dangerous code ("touching this breaks the webhook signature check")
+  - \`context\` — general background that helps reasoning
+  - \`wiki\` — cross-project knowledge that isn't code-specific
+- **Don't write memory for:**
+  - Things obvious from reading the code (function signatures, types, well-named identifiers)
+  - Recap of your own actions ("I edited fetchUser") — that's a commit message, not memory
+  - Every tool call you make — that's noise, not memory. kk is the opposite of capture-everything: write fewer, higher-signal entries.
+- **Repair stale memories.** When \`kk_memory_list_stale\` returns entries, fix the anchor (rename or move) via \`kk_memory_update\`, or delete via \`kk_memory_delete\` if no longer relevant. Don't leave orphaned memories accumulating.
+
 **Full reference:** See https://github.com/vjvkrm/kodeklarity/blob/main/AGENT.md for all commands, config options, graph model, memory system details, and first-run playbook.
 `;
 
