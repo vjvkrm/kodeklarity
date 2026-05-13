@@ -48,7 +48,7 @@
     "start": "node ./dist/bin/kk.js",
     "dev": "npm run build && node ./dist/bin/kk.js",
     "smoke": "npm run build && node ./dist/bin/kk.js help",
-    "test": "npm run build && node --test ./tests/discover.test.js ./tests/config.test.js ./tests/e2e.test.js ./tests/mcp.smoke.test.js ./tests/dashboard.server.test.js ./tests/dashboard.security.test.js ./tests/dashboard.e2e.test.js ./tests/memory.anchor.test.js ./tests/memory.reset.test.js",
+    "test": "npm run build && node --test ./tests/discover.test.js ./tests/config.test.js ./tests/e2e.test.js ./tests/mcp.smoke.test.js ./tests/dashboard.server.test.js ./tests/dashboard.security.test.js ./tests/dashboard.e2e.test.js ./tests/memory.anchor.test.js ./tests/memory.reset.test.js ./tests/memory.list-stale.test.js",
     "test:discover": "npm run build && node --test ./tests/discover.test.js",
     "test:config": "npm run build && node --test ./tests/config.test.js",
     "test:e2e": "npm run build && node --test ./tests/e2e.test.js",

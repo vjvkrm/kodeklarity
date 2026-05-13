@@ -742,6 +742,37 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
     }
   );
 
+  // --- kk_memory_list_stale ---
+  server.tool(
+    "kk_memory_list_stale",
+    `List memories whose code anchor is no longer present in the graph (renamed, moved, deleted). These memories preserve their content but should be reviewed — re-anchor with kk_memory_update or delete with kk_memory_delete. This is the safety net for refactor-aware memory.`,
+    {
+      limit: z.number().int().positive().max(500).optional().default(50).describe("Maximum number of stale memories to return"),
+    },
+    async ({ limit }) => {
+      const cwd = process.cwd();
+      const dbPath = getDbPath(cwd);
+      const db = await getDbModule();
+      await db.initGraphDb(dbPath);
+      const database = db.openDatabase(dbPath);
+      try {
+        db.runMigrations(database);
+        const rows = database.prepare(
+          `SELECT memory_id, symbol_path, node_id, stale_reason, content, summary, category, last_validated_commit_sha, agent, updated_at
+           FROM memories WHERE stale = 1 ORDER BY updated_at DESC LIMIT ?`
+        ).all(limit);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ status: "ok", count: rows.length, memories: rows }),
+          }],
+        };
+      } finally {
+        database.close();
+      }
+    }
+  );
+
   // --- kk_memory_read ---
   server.tool(
     "kk_memory_read",
