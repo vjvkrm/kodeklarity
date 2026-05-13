@@ -312,3 +312,93 @@ test("re-anchor can rescue a memory: stale → resolved when the symbol reappear
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// Regression: `kk memory write --node <symbol>` (the CLI path, not the MCP path)
+// must persist symbol_path alongside node_id. Without it, memories created via
+// the CLI are invisible to the re-anchor pass — they never get re-validated on
+// rebuild and never get flagged stale when their symbol disappears.
+//
+// Original bug: handleMemoryWrite in src/commands.ts inserted node_id but
+// omitted symbol_path. The MCP write path had it; the CLI write path didn't.
+// Fixed in commit b6df805 area. This test exercises handleMemory(['write',...])
+// directly (no subprocess) and asserts the row carries symbol_path = node_id.
+test("regression: CLI handleMemory('write') persists symbol_path alongside node_id", async () => {
+  const COMMANDS_MODULE = path.join(REPO_ROOT, "dist", "src", "commands.js");
+  const { db } = await importBuilt();
+  const commands = await import(COMMANDS_MODULE);
+  const tmp = await mkTmpDir("cli-write");
+  try {
+    const dbPath = path.join(tmp, "graph.sqlite");
+    await db.initGraphDb(dbPath);
+
+    // Seed a synthetic node so the CLI's symbol resolver finds something.
+    // node_id format (kind:file:symbol) matches what makeNodeId produces.
+    const database = db.openDatabase(dbPath);
+    const NODE_ID = "action:src/x:foo";
+    try {
+      const now = new Date().toISOString();
+      database.prepare(`
+        INSERT INTO nodes (
+          feature_name, node_id, kind, symbol, file, line, reason, state, source,
+          request_id, last_build_id, metadata_json, created_at, updated_at
+        ) VALUES (
+          @feature_name, @node_id, @kind, @symbol, @file, @line, @reason, 'verified', 'test',
+          'test', 'test-build', '{}', @now, @now
+        )
+      `).run({
+        feature_name: GLOBAL_FEATURE,
+        node_id: NODE_ID,
+        kind: "action",
+        symbol: "foo",
+        file: "src/x.ts",
+        line: 1,
+        reason: "regression test fixture",
+        now,
+      });
+    } finally {
+      database.close();
+    }
+
+    // Silence the CLI's stdout/stderr for the duration of the call so test
+    // output stays clean. We're only asserting on DB state.
+    const realLog = console.log;
+    const realErr = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    let exitCode;
+    try {
+      exitCode = await commands.handleMemory([
+        "write",
+        "we retry 3x because of upstream rate limits",
+        "--node", "foo",
+        "--category", "gotcha",
+        "--db-path", dbPath,
+        "--json",
+      ]);
+    } finally {
+      console.log = realLog;
+      console.error = realErr;
+    }
+
+    assert.equal(exitCode, 0, "handleMemory write should succeed");
+
+    // The regression check: the inserted memory must carry symbol_path.
+    const database2 = db.openDatabase(dbPath);
+    try {
+      const row = database2
+        .prepare("SELECT node_id, symbol_path FROM memories ORDER BY created_at DESC LIMIT 1")
+        .get();
+      assert.ok(row, "memory row not found");
+      assert.equal(row.node_id, NODE_ID, "node_id should resolve to the seeded symbol");
+      assert.equal(
+        row.symbol_path,
+        NODE_ID,
+        "symbol_path must be persisted on CLI write (regression — was NULL before fix)"
+      );
+    } finally {
+      database2.close();
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+});
