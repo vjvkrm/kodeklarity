@@ -42,6 +42,7 @@ const CLI_TO_MCP = {
   "memory read": "kk_memory_read",
   "memory search": "kk_memory_search",
   "memory list": "kk_memory_list",
+  "memory list-stale": "kk_memory_list_stale",
 };
 
 before(async () => {

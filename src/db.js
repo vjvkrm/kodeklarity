@@ -219,6 +219,20 @@ END;
 `,
     ],
   },
+  {
+    id: "005_anchor_durability",
+    apply: (db) => {
+      ensureColumn(db, "memories", "symbol_path TEXT");
+      ensureColumn(db, "memories", "stale INTEGER NOT NULL DEFAULT 0");
+      ensureColumn(db, "memories", "stale_reason TEXT");
+      ensureColumn(db, "memories", "last_validated_commit_sha TEXT");
+      ensureColumn(db, "memories", "scope TEXT NOT NULL DEFAULT 'code'");
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_symbol_path ON memories(symbol_path);`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_stale ON memories(stale);`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);`);
+      db.exec(`UPDATE memories SET symbol_path = node_id WHERE node_id IS NOT NULL AND symbol_path IS NULL;`);
+    },
+  },
 ];
 
 export function openDatabase(dbPath) {

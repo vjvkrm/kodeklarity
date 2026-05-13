@@ -583,6 +583,7 @@ Usage:
   kk memory read [--node <symbol>] [--category <cat>]
   kk memory search <query> [--category <cat>] [--limit N]
   kk memory list [--category <cat>] [--agent <name>] [--limit N]
+  kk memory list-stale [--limit N] [--json]
 
 Categories: context, gotcha, decision, warning, wiki
 `);
@@ -595,6 +596,7 @@ Categories: context, gotcha, decision, warning, wiki
   if (subcommand === "read") return handleMemoryRead(rest);
   if (subcommand === "search") return handleMemorySearch(rest);
   if (subcommand === "list") return handleMemoryList(rest);
+  if (subcommand === "list-stale") return handleMemoryListStale(rest);
 
   console.error(`Unknown memory subcommand: ${subcommand}`);
   return 1;
@@ -919,6 +921,55 @@ async function handleMemoryList(args: string[]): Promise<number> {
     }
   } catch (err) {
     console.error(`Memory list failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryListStale(args: string[]): Promise<number> {
+  const flags = parseMemoryFlags(args);
+  // Clamp limit to [1, 500]
+  let limit = Number.isFinite(flags.limit) && flags.limit > 0 ? Math.floor(flags.limit) : 50;
+  if (limit > 500) limit = 500;
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(flags.dbPath);
+    const database = db.openDatabase(flags.dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      const memories = database.prepare(
+        `SELECT memory_id, symbol_path, node_id, stale_reason, content, summary, category, last_validated_commit_sha, agent, updated_at
+         FROM memories WHERE stale = 1 ORDER BY updated_at DESC LIMIT ?`
+      ).all(limit) as any[];
+
+      const result = { status: "ok", count: memories.length, memories };
+      emitResult(result, flags.json, (r) => {
+        if (r.count === 0) {
+          console.log("  No stale memories found.");
+          return;
+        }
+        console.log("");
+        console.log(`  ${r.count} stale memories:`);
+        console.log("");
+        for (const m of r.memories) {
+          const anchor = m.symbol_path || m.node_id || "(global)";
+          const reason = m.stale_reason ? ` — ${m.stale_reason}` : "";
+          console.log(`  ${m.memory_id}  ${anchor}${reason}`);
+          const preview = (m.summary || m.content || "").split("\n")[0];
+          if (preview) {
+            console.log(`    ${preview.length > 140 ? preview.slice(0, 140) + "…" : preview}`);
+          }
+          console.log("");
+        }
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory list-stale failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }
