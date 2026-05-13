@@ -631,10 +631,13 @@ async function handleMemoryWrite(args: string[]): Promise<number> {
       const memoryId = `mem-${randomUUID().slice(0, 12)}`;
       const now = new Date().toISOString();
 
+      // Persist symbol_path alongside node_id so the re-anchor pass on rebuild
+      // can deterministically find this memory. node_id encodes kind:file:symbol —
+      // the same format as symbol_path — so we just mirror it.
       database.prepare(`
-        INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
-      `).run(memoryId, nodeId, flags.agent || "cli", flags.category || "context", flags.content, flags.summary || null, now, now);
+        INSERT INTO memories (memory_id, node_id, symbol_path, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
+      `).run(memoryId, nodeId, nodeId, flags.agent || "cli", flags.category || "context", flags.content, flags.summary || null, now, now);
 
       const result = { status: "ok", memory_id: memoryId, node_id: nodeId, category: flags.category || "context" };
       emitResult(result, flags.json, (r) => {
