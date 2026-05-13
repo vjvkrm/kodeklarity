@@ -186,6 +186,58 @@ export async function storeDiscoveryResult(
         });
       }
 
+      // Re-anchor memory pass: deterministically refresh memory anchors against
+      // the freshly-rebuilt nodes. A memory's symbol_path encodes (kind:file:symbol)
+      // — the same triple that makeNodeId produces — so re-resolution is just a
+      // lookup. Memories whose anchor is gone get flagged stale (never deleted).
+      const memoryColumns = database
+        .prepare("PRAGMA table_info(memories)")
+        .all() as Array<{ name: string }>;
+      const hasSymbolPath = memoryColumns.some((c) => c.name === "symbol_path");
+      if (hasSymbolPath) {
+        const anchored = database
+          .prepare(
+            "SELECT memory_id, symbol_path FROM memories WHERE symbol_path IS NOT NULL"
+          )
+          .all() as Array<{ memory_id: string; symbol_path: string }>;
+
+        if (anchored.length > 0) {
+          const nodeExists = database.prepare(
+            "SELECT 1 FROM nodes WHERE feature_name = @feature_name AND node_id = @node_id LIMIT 1"
+          );
+          const markResolved = database.prepare(`
+            UPDATE memories
+            SET node_id = @symbol_path,
+                stale = 0,
+                stale_reason = NULL,
+                last_validated_commit_sha = @sha
+            WHERE memory_id = @memory_id
+          `);
+          const markStale = database.prepare(`
+            UPDATE memories
+            SET stale = 1,
+                stale_reason = 'unresolved'
+            WHERE memory_id = @memory_id
+          `);
+
+          for (const mem of anchored) {
+            const found = nodeExists.get({
+              feature_name: GLOBAL_FEATURE,
+              node_id: mem.symbol_path,
+            });
+            if (found) {
+              markResolved.run({
+                memory_id: mem.memory_id,
+                symbol_path: mem.symbol_path,
+                sha: options.gitSha || null,
+              });
+            } else {
+              markStale.run({ memory_id: mem.memory_id });
+            }
+          }
+        }
+      }
+
       // Store git state
       if (options.gitSha) {
         database.prepare(
