@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getWorkingChanges } from "./git.js";
 import {
@@ -8,6 +7,7 @@ import {
   printMemoriesBlock,
   type Memory,
 } from "./memory-helpers.js";
+import * as memoryCore from "./memory/core.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
 const GLOBAL_FEATURE = "__global__";
@@ -62,14 +62,6 @@ function parseCommandFlags(args: string[]): CommandFlags {
 
 async function getQueryModule() {
   return await import("./query.js");
-}
-
-/** Resolve a symbol name to a node_id using the same logic as kk impact/upstream. */
-async function resolveSymbolToNodeId(database: any, symbol: string): Promise<string | null> {
-  const query = await getQueryModule();
-  const result = query.resolveNodeReference(database, GLOBAL_FEATURE, symbol);
-  if (result.ok) return result.node.node_id;
-  return null;
 }
 
 function emitResult(data: unknown, json: boolean, humanPrinter: (d: any) => void): void {
@@ -612,41 +604,45 @@ async function handleMemoryWrite(args: string[]): Promise<number> {
   }
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      // Resolve --node symbol to node_id
-      let nodeId: string | null = null;
-      if (flags.node) {
-        nodeId = await resolveSymbolToNodeId(database, flags.node);
-        if (!nodeId) {
-          console.error(`Warning: No node found for symbol "${flags.node}" — saving as global memory`);
+    // If --node was given but resolves to nothing, fall back to global memory
+    // (matches prior CLI behavior — emit warning, keep going).
+    let symbol: string | undefined = flags.node;
+    if (symbol) {
+      try {
+        const result = await memoryCore.writeMemory({
+          dbPath: flags.dbPath,
+          content: flags.content,
+          symbol,
+          category: flags.category,
+          summary: flags.summary,
+          agent: flags.agent || "cli",
+        });
+        emitResult({ status: "ok", ...result }, flags.json, (r) => {
+          console.log(`  Memory saved: ${r.memory_id}${r.node_id ? ` → ${r.node_id}` : " (global)"}`);
+        });
+        return 0;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.startsWith("No node found")) {
+          console.error(`Warning: ${msg} — saving as global memory`);
+          symbol = undefined; // fall through to global write below
+        } else {
+          throw err;
         }
       }
-
-      const memoryId = `mem-${randomUUID().slice(0, 12)}`;
-      const now = new Date().toISOString();
-
-      // Persist symbol_path alongside node_id so the re-anchor pass on rebuild
-      // can deterministically find this memory. node_id encodes kind:file:symbol —
-      // the same format as symbol_path — so we just mirror it.
-      database.prepare(`
-        INSERT INTO memories (memory_id, node_id, symbol_path, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
-      `).run(memoryId, nodeId, nodeId, flags.agent || "cli", flags.category || "context", flags.content, flags.summary || null, now, now);
-
-      const result = { status: "ok", memory_id: memoryId, node_id: nodeId, category: flags.category || "context" };
-      emitResult(result, flags.json, (r) => {
-        console.log(`  Memory saved: ${r.memory_id}${r.node_id ? ` → ${r.node_id}` : " (global)"}`);
-      });
-      return 0;
-    } finally {
-      database.close();
     }
+
+    const result = await memoryCore.writeMemory({
+      dbPath: flags.dbPath,
+      content: flags.content,
+      category: flags.category,
+      summary: flags.summary,
+      agent: flags.agent || "cli",
+    });
+    emitResult({ status: "ok", ...result }, flags.json, (r) => {
+      console.log(`  Memory saved: ${r.memory_id}${r.node_id ? ` → ${r.node_id}` : " (global)"}`);
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory write failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -661,46 +657,27 @@ async function handleMemoryUpdate(args: string[]): Promise<number> {
     return 1;
   }
 
+  // CLI legacy: --content takes its argument from the next argv slot, not from
+  // flags.content (which is the first positional and holds memory_id).
+  const newContent = args.find((a, i) => args[i - 1] === "--content");
+
+  if (newContent === undefined && flags.summary === undefined && flags.category === undefined) {
+    console.error("No fields to update. Use --content, --summary, or --category.");
+    return 1;
+  }
+
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      const existing = database.prepare("SELECT * FROM memories WHERE memory_id = ?").get(memoryId);
-      if (!existing) {
-        console.error(`Memory ${memoryId} not found`);
-        return 1;
-      }
-
-      const updates: string[] = [];
-      const params: any[] = [];
-
-      // For update, --content flag is the new content (not positional)
-      const newContent = args.find((a, i) => args[i - 1] === "--content");
-      if (newContent) { updates.push("content = ?"); params.push(newContent); }
-      if (flags.summary) { updates.push("summary = ?"); params.push(flags.summary); }
-      if (flags.category) { updates.push("category = ?"); params.push(flags.category); }
-
-      if (updates.length === 0) {
-        console.error("No fields to update. Use --content, --summary, or --category.");
-        return 1;
-      }
-
-      updates.push("updated_at = ?");
-      params.push(new Date().toISOString());
-      params.push(memoryId);
-
-      database.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE memory_id = ?`).run(...params);
-
-      const result = { status: "ok", memory_id: memoryId, updated: true };
-      emitResult(result, flags.json, () => console.log(`  Memory updated: ${memoryId}`));
-      return 0;
-    } finally {
-      database.close();
-    }
+    const result = await memoryCore.updateMemory({
+      dbPath: flags.dbPath,
+      memoryId,
+      content: newContent,
+      summary: flags.summary,
+      category: flags.category,
+    });
+    emitResult({ status: "ok", memory_id: memoryId, updated: result.updated }, flags.json, () =>
+      console.log(`  Memory updated: ${memoryId}`)
+    );
+    return 0;
   } catch (err) {
     console.error(`Memory update failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -725,43 +702,22 @@ async function handleMemoryDelete(args: string[]): Promise<number> {
   }
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(dbPath);
-    const database = db.openDatabase(dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      const deleted: string[] = [];
-      const notFound: string[] = [];
-      const stmt = database.prepare("DELETE FROM memories WHERE memory_id = ?");
-      const tx = database.transaction((ids: string[]) => {
-        for (const id of ids) {
-          const info = stmt.run(id);
-          if (info.changes > 0) deleted.push(id);
-          else notFound.push(id);
-        }
-      });
-      tx(memoryIds);
-
-      const result = {
-        status: notFound.length === 0 ? "ok" : "partial",
-        deleted_count: deleted.length,
-        deleted,
-        not_found: notFound,
-      };
-      emitResult(result, json, (r) => {
-        if (r.deleted_count > 0) {
-          console.log(`  Deleted ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"}: ${r.deleted.join(", ")}`);
-        }
-        if (r.not_found.length > 0) {
-          console.log(`  Not found: ${r.not_found.join(", ")}`);
-        }
-      });
-      return notFound.length === memoryIds.length ? 1 : 0;
-    } finally {
-      database.close();
-    }
+    const { deleted, not_found } = await memoryCore.deleteMemory({ dbPath, memoryIds });
+    const result = {
+      status: not_found.length === 0 ? "ok" : "partial",
+      deleted_count: deleted.length,
+      deleted,
+      not_found,
+    };
+    emitResult(result, json, (r) => {
+      if (r.deleted_count > 0) {
+        console.log(`  Deleted ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"}: ${r.deleted.join(", ")}`);
+      }
+      if (r.not_found.length > 0) {
+        console.log(`  Not found: ${r.not_found.join(", ")}`);
+      }
+    });
+    return not_found.length === memoryIds.length ? 1 : 0;
   } catch (err) {
     console.error(`Memory delete failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -772,54 +728,37 @@ async function handleMemoryRead(args: string[]): Promise<number> {
   const flags = parseMemoryFlags(args);
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
+    const result = await memoryCore.readMemory({
+      dbPath: flags.dbPath,
+      symbol: flags.node,
+      category: flags.category,
+      limit: flags.limit,
+      // CLI mirrors prior behavior: no edge memories. MCP gets them.
+      includeEdgeMemories: false,
+    });
 
-    try {
-      db.runMigrations(database);
-
-      let memories: any[];
-      if (flags.node) {
-        const resolvedId = await resolveSymbolToNodeId(database, flags.node);
-        if (!resolvedId) {
-          console.log(`  No nodes matching "${flags.node}"`);
-          return 0;
-        }
-        const nodeIds = [resolvedId];
-        const placeholders = nodeIds.map(() => "?").join(",");
-        const catFilter = flags.category ? " AND category = ?" : "";
-        memories = database.prepare(
-          `SELECT * FROM memories WHERE node_id IN (${placeholders})${catFilter} ORDER BY updated_at DESC`
-        ).all(...nodeIds, ...(flags.category ? [flags.category] : []));
-      } else {
-        // Global memories
-        const catFilter = flags.category ? " AND category = ?" : "";
-        memories = database.prepare(
-          `SELECT * FROM memories WHERE node_id IS NULL AND edge_id IS NULL${catFilter} ORDER BY updated_at DESC LIMIT ?`
-        ).all(...(flags.category ? [flags.category] : []), flags.limit);
-      }
-
-      const result = { status: "ok", count: memories.length, memories };
-      emitResult(result, flags.json, (r) => {
-        if (r.count === 0) {
-          console.log("  No memories found.");
-          return;
-        }
-        console.log("");
-        for (const m of r.memories) {
-          const tag = m.node_id ? `[${m.category}] → ${m.node_id}` : `[${m.category}] (global)`;
-          console.log(`  ${m.memory_id}  ${tag}`);
-          console.log(`    ${m.content}`);
-          if (m.summary) console.log(`    Summary: ${m.summary}`);
-          console.log(`    Agent: ${m.agent} | Updated: ${m.updated_at}`);
-          console.log("");
-        }
-      });
+    if (flags.node && result.symbol_not_found) {
+      console.log(`  No nodes matching "${flags.node}"`);
       return 0;
-    } finally {
-      database.close();
     }
+
+    const payload = { status: "ok", count: result.memories.length, memories: result.memories };
+    emitResult(payload, flags.json, (r) => {
+      if (r.count === 0) {
+        console.log("  No memories found.");
+        return;
+      }
+      console.log("");
+      for (const m of r.memories) {
+        const tag = m.node_id ? `[${m.category}] → ${m.node_id}` : `[${m.category}] (global)`;
+        console.log(`  ${m.memory_id}  ${tag}`);
+        console.log(`    ${m.content}`);
+        if (m.summary) console.log(`    Summary: ${m.summary}`);
+        console.log(`    Agent: ${m.agent} | Updated: ${m.updated_at}`);
+        console.log("");
+      }
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory read failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -835,47 +774,29 @@ async function handleMemorySearch(args: string[]): Promise<number> {
   }
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      // Add prefix matching: "migration" → "migration*" so it matches "migrations"
-      const ftsQuery = query.trim().split(/\s+/).map((w: string) => `${w}*`).join(" ");
-      const catFilter = flags.category ? " AND m.category = ?" : "";
-      const params: any[] = [ftsQuery, ...(flags.category ? [flags.category] : []), flags.limit];
-
-      const results = database.prepare(`
-        SELECT m.*, rank
-        FROM memories_fts fts
-        JOIN memories m ON m.rowid = fts.rowid
-        WHERE memories_fts MATCH ?${catFilter}
-        ORDER BY rank
-        LIMIT ?
-      `).all(...params) as any[];
-
-      const result = { status: "ok", query, count: results.length, memories: results };
-      emitResult(result, flags.json, (r) => {
-        if (r.count === 0) {
-          console.log(`  No memories matching "${query}"`);
-          return;
-        }
+    const result = await memoryCore.searchMemory({
+      dbPath: flags.dbPath,
+      query,
+      category: flags.category,
+      limit: flags.limit,
+    });
+    const payload = { status: "ok", query: result.query, count: result.memories.length, memories: result.memories };
+    emitResult(payload, flags.json, (r) => {
+      if (r.count === 0) {
+        console.log(`  No memories matching "${query}"`);
+        return;
+      }
+      console.log("");
+      console.log(`  ${r.count} memories matching "${query}":`);
+      console.log("");
+      for (const m of r.memories) {
+        const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
+        console.log(`  ${m.memory_id}  [${m.category}] ${tag}`);
+        console.log(`    ${m.content}`);
         console.log("");
-        console.log(`  ${r.count} memories matching "${query}":`);
-        console.log("");
-        for (const m of r.memories) {
-          const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
-          console.log(`  ${m.memory_id}  [${m.category}] ${tag}`);
-          console.log(`    ${m.content}`);
-          console.log("");
-        }
-      });
-      return 0;
-    } finally {
-      database.close();
-    }
+      }
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory search failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -886,44 +807,29 @@ async function handleMemoryList(args: string[]): Promise<number> {
   const flags = parseMemoryFlags(args);
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      const filters: string[] = [];
-      const params: any[] = [];
-      if (flags.category) { filters.push("category = ?"); params.push(flags.category); }
-      if (flags.agent) { filters.push("agent = ?"); params.push(flags.agent); }
-      const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
-      params.push(flags.limit);
-
-      const memories = database.prepare(
-        `SELECT * FROM memories ${where} ORDER BY updated_at DESC LIMIT ?`
-      ).all(...params) as any[];
-
-      const result = { status: "ok", count: memories.length, memories };
-      emitResult(result, flags.json, (r) => {
-        if (r.count === 0) {
-          console.log("  No memories found.");
-          return;
-        }
+    const result = await memoryCore.listMemories({
+      dbPath: flags.dbPath,
+      category: flags.category,
+      agent: flags.agent,
+      limit: flags.limit,
+    });
+    const payload = { status: "ok", count: result.memories.length, memories: result.memories };
+    emitResult(payload, flags.json, (r) => {
+      if (r.count === 0) {
+        console.log("  No memories found.");
+        return;
+      }
+      console.log("");
+      console.log(`  ${r.count} memories:`);
+      console.log("");
+      for (const m of r.memories) {
+        const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
+        console.log(`  ${m.memory_id}  [${m.category}] ${tag}  (${m.agent})`);
+        console.log(`    ${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}`);
         console.log("");
-        console.log(`  ${r.count} memories:`);
-        console.log("");
-        for (const m of r.memories) {
-          const tag = m.node_id ? `→ ${m.node_id}` : "(global)";
-          console.log(`  ${m.memory_id}  [${m.category}] ${tag}  (${m.agent})`);
-          console.log(`    ${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}`);
-          console.log("");
-        }
-      });
-      return 0;
-    } finally {
-      database.close();
-    }
+      }
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory list failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -949,26 +855,11 @@ async function handleMemoryReset(args: string[]): Promise<number> {
   }
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(dbPath);
-    const database = db.openDatabase(dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      // DELETE FROM memories (not DROP) — keeps the table and FTS triggers intact.
-      // The memories_fts_delete trigger fires per row, so FTS index is also cleared.
-      const info = database.prepare("DELETE FROM memories").run();
-      const deletedCount = info.changes;
-
-      const result = { status: "ok", deleted_count: deletedCount };
-      emitResult(result, json, (r) => {
-        console.log(`  Reset: ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"} deleted.`);
-      });
-      return 0;
-    } finally {
-      database.close();
-    }
+    const result = await memoryCore.resetMemories({ dbPath });
+    emitResult({ status: "ok", ...result }, json, (r) => {
+      console.log(`  Reset: ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"} deleted.`);
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory reset failed: ${err instanceof Error ? err.message : err}`);
     return 1;
@@ -982,42 +873,28 @@ async function handleMemoryListStale(args: string[]): Promise<number> {
   if (limit > 500) limit = 500;
 
   try {
-    const db = await import("./db.js");
-    await db.initGraphDb(flags.dbPath);
-    const database = db.openDatabase(flags.dbPath);
-
-    try {
-      db.runMigrations(database);
-
-      const memories = database.prepare(
-        `SELECT memory_id, symbol_path, node_id, stale_reason, content, summary, category, last_validated_commit_sha, agent, updated_at
-         FROM memories WHERE stale = 1 ORDER BY updated_at DESC LIMIT ?`
-      ).all(limit) as any[];
-
-      const result = { status: "ok", count: memories.length, memories };
-      emitResult(result, flags.json, (r) => {
-        if (r.count === 0) {
-          console.log("  No stale memories found.");
-          return;
+    const result = await memoryCore.listStaleMemories({ dbPath: flags.dbPath, limit });
+    const payload = { status: "ok", count: result.memories.length, memories: result.memories };
+    emitResult(payload, flags.json, (r) => {
+      if (r.count === 0) {
+        console.log("  No stale memories found.");
+        return;
+      }
+      console.log("");
+      console.log(`  ${r.count} stale memories:`);
+      console.log("");
+      for (const m of r.memories) {
+        const anchor = m.symbol_path || m.node_id || "(global)";
+        const reason = m.stale_reason ? ` — ${m.stale_reason}` : "";
+        console.log(`  ${m.memory_id}  ${anchor}${reason}`);
+        const preview = (m.summary || m.content || "").split("\n")[0];
+        if (preview) {
+          console.log(`    ${preview.length > 140 ? preview.slice(0, 140) + "…" : preview}`);
         }
         console.log("");
-        console.log(`  ${r.count} stale memories:`);
-        console.log("");
-        for (const m of r.memories) {
-          const anchor = m.symbol_path || m.node_id || "(global)";
-          const reason = m.stale_reason ? ` — ${m.stale_reason}` : "";
-          console.log(`  ${m.memory_id}  ${anchor}${reason}`);
-          const preview = (m.summary || m.content || "").split("\n")[0];
-          if (preview) {
-            console.log(`    ${preview.length > 140 ? preview.slice(0, 140) + "…" : preview}`);
-          }
-          console.log("");
-        }
-      });
-      return 0;
-    } finally {
-      database.close();
-    }
+      }
+    });
+    return 0;
   } catch (err) {
     console.error(`Memory list-stale failed: ${err instanceof Error ? err.message : err}`);
     return 1;

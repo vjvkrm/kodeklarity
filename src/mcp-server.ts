@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -11,6 +10,7 @@ import { loadConfig, saveConfig, generateDefaultConfig, mergeConfig, validateCon
 import { getGitState } from "./git.js";
 import { compactifyTraversal, compactifyStatus, summarizeTraversal } from "./compact.js";
 import { fetchMemoriesForTraversal } from "./memory-helpers.js";
+import * as memoryCore from "./memory/core.js";
 
 const DEFAULT_DB_PATH = ".kodeklarity/index/graph.sqlite";
 const GLOBAL_FEATURE = "__global__";
@@ -25,19 +25,6 @@ async function getDbModule() {
 
 function getDbPath(cwd: string): string {
   return path.join(cwd, DEFAULT_DB_PATH);
-}
-
-/** Resolve a symbol name to a node_id using the same logic as kk_impact/kk_upstream. */
-async function resolveSymbol(database: any, symbol: string): Promise<{ nodeId: string | null; error: string | null }> {
-  const query = await getQueryModule();
-  const result = query.resolveNodeReference(database, GLOBAL_FEATURE, symbol);
-  if (result.ok) {
-    return { nodeId: result.node.node_id, error: null };
-  }
-  if (result.error?.code === "ambiguous_reference") {
-    return { nodeId: null, error: `Symbol "${symbol}" matches multiple nodes: ${result.error.matches.join(", ")}. Be more specific.` };
-  }
-  return { nodeId: null, error: `No node found for "${symbol}". Use kk_search to find valid symbols.` };
 }
 
 export async function startMcpServer() {
@@ -575,58 +562,25 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       commit_sha: z.string().optional().describe("Git commit SHA when this memory was created"),
     },
     async ({ content, summary, symbol, node_id, edge_id, agent, category, commit_sha }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-
-        // Resolve symbol to node_id if symbol provided but node_id not
-        let resolvedNodeId = node_id || null;
-        if (!resolvedNodeId && symbol) {
-          const resolved = await resolveSymbol(database, symbol);
-          if (resolved.error) {
-            return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: resolved.error }) }] };
-          }
-          resolvedNodeId = resolved.nodeId;
-        }
-
-        const memoryId = `mem-${randomUUID().slice(0, 12)}`;
-        const now = new Date().toISOString();
-
-        // symbol_path mirrors the node_id format (kind:file:symbol) so it's
-        // re-resolvable across rebuilds. For code-anchored memories this is
-        // simply the resolved node_id. Global / edge-only memories leave it null.
-        const symbolPath = resolvedNodeId || null;
-
-        database.prepare(`
-          INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, symbol_path, created_at, updated_at)
-          VALUES (@memory_id, @node_id, @edge_id, @agent, @category, @content, @summary, @commit_sha, @symbol_path, @created_at, @updated_at)
-        `).run({
-          memory_id: memoryId,
-          node_id: resolvedNodeId,
-          edge_id: edge_id || null,
-          agent: agent || "unknown",
-          category: category || "context",
+        const result = await memoryCore.writeMemory({
+          dbPath,
           content,
-          summary: summary || null,
-          commit_sha: commit_sha || null,
-          symbol_path: symbolPath,
-          created_at: now,
-          updated_at: now,
+          symbol,
+          nodeId: node_id,
+          edgeId: edge_id,
+          category,
+          summary,
+          agent: agent || "unknown",
+          commitSha: commit_sha,
         });
-
         return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ status: "ok", memory_id: memoryId, node_id: resolvedNodeId, symbol: symbol || null, category }),
-          }],
+          content: [{ type: "text", text: JSON.stringify({ status: "ok", ...result }) }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -645,56 +599,22 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       edge_id: z.string().optional().describe("Change attached edge"),
     },
     async ({ memory_id, content, summary, category, symbol, node_id, edge_id }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-
-        const existing = database.prepare("SELECT * FROM memories WHERE memory_id = ?").get(memory_id) as any;
-        if (!existing) {
-          return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: `Memory ${memory_id} not found` }) }] };
-        }
-
-        const updates: string[] = [];
-        const params: any = { memory_id };
-
-        if (content !== undefined) { updates.push("content = @content"); params.content = content; }
-        if (summary !== undefined) { updates.push("summary = @summary"); params.summary = summary; }
-        if (category !== undefined) { updates.push("category = @category"); params.category = category; }
-        if (symbol !== undefined && node_id === undefined) {
-          const resolved = await resolveSymbol(database, symbol);
-          if (resolved.nodeId) {
-            updates.push("node_id = @node_id");
-            params.node_id = resolved.nodeId;
-            // Keep symbol_path in sync so the re-anchor pass can re-resolve.
-            updates.push("symbol_path = @symbol_path");
-            params.symbol_path = resolved.nodeId;
-          }
-        }
-        if (node_id !== undefined) {
-          updates.push("node_id = @node_id");
-          params.node_id = node_id;
-          updates.push("symbol_path = @symbol_path");
-          params.symbol_path = node_id || null;
-        }
-        if (edge_id !== undefined) { updates.push("edge_id = @edge_id"); params.edge_id = edge_id; }
-
-        if (updates.length === 0) {
-          return { content: [{ type: "text", text: JSON.stringify({ status: "ok", memory_id, updated: false, message: "No fields to update" }) }] };
-        }
-
-        updates.push("updated_at = @updated_at");
-        params.updated_at = new Date().toISOString();
-
-        database.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE memory_id = @memory_id`).run(params);
-
-        return { content: [{ type: "text", text: JSON.stringify({ status: "ok", memory_id, updated: true }) }] };
-      } finally {
-        database.close();
+        const result = await memoryCore.updateMemory({
+          dbPath,
+          memoryId: memory_id,
+          content,
+          summary,
+          category,
+          symbol,
+          nodeId: node_id,
+          edgeId: edge_id,
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ status: "ok", ...result }) }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -708,36 +628,22 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
     },
     async ({ memory_ids }) => {
       const dbPath = getDbPath(process.cwd());
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
       try {
-        db.runMigrations(database);
-        const deleted: string[] = [];
-        const notFound: string[] = [];
-        const stmt = database.prepare("DELETE FROM memories WHERE memory_id = ?");
-        const tx = database.transaction((ids: string[]) => {
-          for (const id of ids) {
-            const info = stmt.run(id);
-            if (info.changes > 0) deleted.push(id);
-            else notFound.push(id);
-          }
-        });
-        tx(memory_ids);
-
+        const { deleted, not_found } = await memoryCore.deleteMemory({ dbPath, memoryIds: memory_ids });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              status: notFound.length === 0 ? "ok" : "partial",
+              status: not_found.length === 0 ? "ok" : "partial",
               deleted_count: deleted.length,
               deleted,
-              not_found: notFound,
+              not_found,
             }),
           }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -750,25 +656,18 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       limit: z.number().int().positive().max(500).optional().default(50).describe("Maximum number of stale memories to return"),
     },
     async ({ limit }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-        const rows = database.prepare(
-          `SELECT memory_id, symbol_path, node_id, stale_reason, content, summary, category, last_validated_commit_sha, agent, updated_at
-           FROM memories WHERE stale = 1 ORDER BY updated_at DESC LIMIT ?`
-        ).all(limit);
+        const result = await memoryCore.listStaleMemories({ dbPath, limit });
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({ status: "ok", count: rows.length, memories: rows }),
+            text: JSON.stringify({ status: "ok", count: result.memories.length, memories: result.memories }),
           }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -783,101 +682,30 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       category: z.string().optional().describe("Filter by category"),
     },
     async ({ symbol, node_id, category }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-
-        // Resolve symbol to node_ids
-        const nodeIds: string[] = [];
-        if (node_id) {
-          nodeIds.push(node_id);
-        } else if (symbol) {
-          const resolved = await resolveSymbol(database, symbol);
-          if (resolved.nodeId) {
-            nodeIds.push(resolved.nodeId);
-          }
-          // If ambiguous or not found, return what we have (empty = global memories)
-        }
-
-        let memories: any[];
-        if (nodeIds.length > 0) {
-          const placeholders = nodeIds.map(() => "?").join(",");
-          const catFilter = category ? " AND category = ?" : "";
-          const params = [...nodeIds, ...(category ? [category] : [])];
-          memories = database.prepare(
-            `SELECT * FROM memories WHERE node_id IN (${placeholders})${catFilter} ORDER BY updated_at DESC`
-          ).all(...params);
-
-          // Also get edge memories touching these nodes
-          const edgeMemories = database.prepare(
-            `SELECT m.* FROM memories m JOIN edges e ON m.edge_id = e.edge_id AND e.feature_name = ?
-             WHERE (e.from_node_id IN (${placeholders}) OR e.to_node_id IN (${placeholders}))${catFilter}
-             ORDER BY m.updated_at DESC`
-          ).all(GLOBAL_FEATURE, ...nodeIds, ...nodeIds, ...(category ? [category] : []));
-          const seenIds = new Set(memories.map((m: any) => m.memory_id));
-          for (const em of edgeMemories) {
-            if (!seenIds.has((em as any).memory_id)) memories.push(em);
-          }
-        } else {
-          // No symbol/node — return global memories
-          const catFilter = category ? " AND category = ?" : "";
-          memories = database.prepare(
-            `SELECT * FROM memories WHERE node_id IS NULL AND edge_id IS NULL${catFilter} ORDER BY updated_at DESC LIMIT 50`
-          ).all(...(category ? [category] : []));
-        }
-
-        // Stale check: prefer the persisted `stale` column (authoritative —
-        // set by the re-anchor pass during rebuild). Fall back to a live node
-        // existence check for backward compatibility with pre-migration data.
-        for (const mem of memories) {
-          if (mem.node_id) {
-            if (mem.stale === 1 || mem.stale === true) {
-              (mem as any).stale = true;
-            } else if (mem.stale === 0 || mem.stale === false) {
-              (mem as any).stale = false;
-            } else {
-              const exists = database.prepare(
-                "SELECT 1 FROM nodes WHERE feature_name = ? AND node_id = ? LIMIT 1"
-              ).get(GLOBAL_FEATURE, mem.node_id);
-              (mem as any).stale = !exists;
-            }
-          }
-        }
-
+        const result = await memoryCore.readMemory({
+          dbPath,
+          symbol,
+          nodeId: node_id,
+          category,
+          includeEdgeMemories: true,
+        });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               status: "ok",
-              symbol: symbol || null,
-              node_ids: nodeIds,
-              count: memories.length,
-              memories: memories.map((m: any) => ({
-                memory_id: m.memory_id,
-                node_id: m.node_id,
-                edge_id: m.edge_id,
-                agent: m.agent,
-                category: m.category,
-                content: m.content,
-                summary: m.summary,
-                commit_sha: m.commit_sha,
-                symbol_path: m.symbol_path ?? null,
-                stale: m.stale || false,
-                stale_reason: m.stale_reason ?? null,
-                last_validated_commit_sha: m.last_validated_commit_sha ?? null,
-                created_at: m.created_at,
-                updated_at: m.updated_at,
-              })),
+              symbol: result.symbol,
+              node_ids: result.node_ids,
+              count: result.memories.length,
+              memories: result.memories,
             }),
           }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -892,67 +720,23 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       limit: z.number().optional().default(20).describe("Max results"),
     },
     async ({ query, category, limit }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-
-        // Add prefix matching: "migration" → "migration*" so it matches "migrations"
-        const ftsQuery = query.trim().split(/\s+/).map((w) => `${w}*`).join(" ");
-        const catFilter = category ? " AND m.category = ?" : "";
-        const params: any[] = [ftsQuery, ...(category ? [category] : []), limit || 20];
-
-        const results = database.prepare(`
-          SELECT m.*, rank
-          FROM memories_fts fts
-          JOIN memories m ON m.rowid = fts.rowid
-          WHERE memories_fts MATCH ?${catFilter}
-          ORDER BY rank
-          LIMIT ?
-        `).all(...params) as any[];
-
-        // Enrich with node info
-        for (const r of results) {
-          if (r.node_id) {
-            const node = database.prepare(
-              "SELECT symbol, kind, file FROM nodes WHERE feature_name = ? AND node_id = ?"
-            ).get(GLOBAL_FEATURE, r.node_id) as any;
-            r.node_symbol = node?.symbol || null;
-            r.node_kind = node?.kind || null;
-            r.node_file = node?.file || null;
-            r.stale = !node;
-          }
-        }
-
+        const result = await memoryCore.searchMemory({ dbPath, query, category, limit });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               status: "ok",
-              query,
-              count: results.length,
-              memories: results.map((m: any) => ({
-                memory_id: m.memory_id,
-                node_id: m.node_id,
-                node_symbol: m.node_symbol || null,
-                node_kind: m.node_kind || null,
-                node_file: m.node_file || null,
-                agent: m.agent,
-                category: m.category,
-                content: m.content,
-                summary: m.summary,
-                stale: m.stale || false,
-                updated_at: m.updated_at,
-              })),
+              query: result.query,
+              count: result.memories.length,
+              memories: result.memories,
             }),
           }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
@@ -967,63 +751,22 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
       limit: z.number().optional().default(50).describe("Max results"),
     },
     async ({ category, agent, limit }) => {
-      const cwd = process.cwd();
-      const dbPath = getDbPath(cwd);
-      const db = await getDbModule();
-      await db.initGraphDb(dbPath);
-      const database = db.openDatabase(dbPath);
-
+      const dbPath = getDbPath(process.cwd());
       try {
-        db.runMigrations(database);
-
-        const filters: string[] = [];
-        const params: any[] = [];
-        if (category) { filters.push("category = ?"); params.push(category); }
-        if (agent) { filters.push("agent = ?"); params.push(agent); }
-        const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
-        params.push(limit || 50);
-
-        const memories = database.prepare(
-          `SELECT * FROM memories ${where} ORDER BY updated_at DESC LIMIT ?`
-        ).all(...params) as any[];
-
-        // Enrich with node info
-        for (const m of memories) {
-          if (m.node_id) {
-            const node = database.prepare(
-              "SELECT symbol, kind, file FROM nodes WHERE feature_name = ? AND node_id = ?"
-            ).get(GLOBAL_FEATURE, m.node_id) as any;
-            m.node_symbol = node?.symbol || null;
-            m.node_kind = node?.kind || null;
-            m.stale = !node;
-          }
-        }
-
+        const result = await memoryCore.listMemories({ dbPath, category, agent, limit });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               status: "ok",
-              count: memories.length,
-              memories: memories.map((m: any) => ({
-                memory_id: m.memory_id,
-                node_id: m.node_id,
-                node_symbol: m.node_symbol || null,
-                node_kind: m.node_kind || null,
-                edge_id: m.edge_id,
-                agent: m.agent,
-                category: m.category,
-                content: m.content,
-                summary: m.summary,
-                stale: m.stale || false,
-                created_at: m.created_at,
-                updated_at: m.updated_at,
-              })),
+              count: result.memories.length,
+              memories: result.memories,
             }),
           }],
         };
-      } finally {
-        database.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", message: msg }) }] };
       }
     }
   );
