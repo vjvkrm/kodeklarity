@@ -597,9 +597,14 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
         const memoryId = `mem-${randomUUID().slice(0, 12)}`;
         const now = new Date().toISOString();
 
+        // symbol_path mirrors the node_id format (kind:file:symbol) so it's
+        // re-resolvable across rebuilds. For code-anchored memories this is
+        // simply the resolved node_id. Global / edge-only memories leave it null.
+        const symbolPath = resolvedNodeId || null;
+
         database.prepare(`
-          INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, created_at, updated_at)
-          VALUES (@memory_id, @node_id, @edge_id, @agent, @category, @content, @summary, @commit_sha, @created_at, @updated_at)
+          INSERT INTO memories (memory_id, node_id, edge_id, agent, category, content, summary, commit_sha, symbol_path, created_at, updated_at)
+          VALUES (@memory_id, @node_id, @edge_id, @agent, @category, @content, @summary, @commit_sha, @symbol_path, @created_at, @updated_at)
         `).run({
           memory_id: memoryId,
           node_id: resolvedNodeId,
@@ -609,6 +614,7 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
           content,
           summary: summary || null,
           commit_sha: commit_sha || null,
+          symbol_path: symbolPath,
           created_at: now,
           updated_at: now,
         });
@@ -661,9 +667,20 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
         if (category !== undefined) { updates.push("category = @category"); params.category = category; }
         if (symbol !== undefined && node_id === undefined) {
           const resolved = await resolveSymbol(database, symbol);
-          if (resolved.nodeId) { updates.push("node_id = @node_id"); params.node_id = resolved.nodeId; }
+          if (resolved.nodeId) {
+            updates.push("node_id = @node_id");
+            params.node_id = resolved.nodeId;
+            // Keep symbol_path in sync so the re-anchor pass can re-resolve.
+            updates.push("symbol_path = @symbol_path");
+            params.symbol_path = resolved.nodeId;
+          }
         }
-        if (node_id !== undefined) { updates.push("node_id = @node_id"); params.node_id = node_id; }
+        if (node_id !== undefined) {
+          updates.push("node_id = @node_id");
+          params.node_id = node_id;
+          updates.push("symbol_path = @symbol_path");
+          params.symbol_path = node_id || null;
+        }
         if (edge_id !== undefined) { updates.push("edge_id = @edge_id"); params.edge_id = edge_id; }
 
         if (updates.length === 0) {
@@ -783,13 +800,21 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
           ).all(...(category ? [category] : []));
         }
 
-        // Check for stale memories (node no longer exists)
+        // Stale check: prefer the persisted `stale` column (authoritative —
+        // set by the re-anchor pass during rebuild). Fall back to a live node
+        // existence check for backward compatibility with pre-migration data.
         for (const mem of memories) {
           if (mem.node_id) {
-            const exists = database.prepare(
-              "SELECT 1 FROM nodes WHERE feature_name = ? AND node_id = ? LIMIT 1"
-            ).get(GLOBAL_FEATURE, mem.node_id);
-            (mem as any).stale = !exists;
+            if (mem.stale === 1 || mem.stale === true) {
+              (mem as any).stale = true;
+            } else if (mem.stale === 0 || mem.stale === false) {
+              (mem as any).stale = false;
+            } else {
+              const exists = database.prepare(
+                "SELECT 1 FROM nodes WHERE feature_name = ? AND node_id = ? LIMIT 1"
+              ).get(GLOBAL_FEATURE, mem.node_id);
+              (mem as any).stale = !exists;
+            }
           }
         }
 
@@ -810,7 +835,10 @@ Categories: "context" (general), "gotcha" (watch out), "decision" (why something
                 content: m.content,
                 summary: m.summary,
                 commit_sha: m.commit_sha,
+                symbol_path: m.symbol_path ?? null,
                 stale: m.stale || false,
+                stale_reason: m.stale_reason ?? null,
+                last_validated_commit_sha: m.last_validated_commit_sha ?? null,
                 created_at: m.created_at,
                 updated_at: m.updated_at,
               })),
