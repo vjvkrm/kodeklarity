@@ -583,6 +583,7 @@ Usage:
   kk memory read [--node <symbol>] [--category <cat>]
   kk memory search <query> [--category <cat>] [--limit N]
   kk memory list [--category <cat>] [--agent <name>] [--limit N]
+  kk memory reset --yes                     # WIPE all memories (destructive)
 
 Categories: context, gotcha, decision, warning, wiki
 `);
@@ -595,6 +596,7 @@ Categories: context, gotcha, decision, warning, wiki
   if (subcommand === "read") return handleMemoryRead(rest);
   if (subcommand === "search") return handleMemorySearch(rest);
   if (subcommand === "list") return handleMemoryList(rest);
+  if (subcommand === "reset") return handleMemoryReset(rest);
 
   console.error(`Unknown memory subcommand: ${subcommand}`);
   return 1;
@@ -919,6 +921,51 @@ async function handleMemoryList(args: string[]): Promise<number> {
     }
   } catch (err) {
     console.error(`Memory list failed: ${err instanceof Error ? err.message : err}`);
+    return 1;
+  }
+}
+
+async function handleMemoryReset(args: string[]): Promise<number> {
+  // Parse flags directly: --yes is a confirmation gate, --json toggles output,
+  // --db-path overrides the default location. No positional args.
+  let confirmed = false;
+  let json = false;
+  let dbPath = path.join(process.cwd(), DEFAULT_DB_PATH);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--yes") { confirmed = true; continue; }
+    if (a === "--json") { json = true; continue; }
+    if (a === "--db-path" && args[i + 1]) { dbPath = args[++i]; continue; }
+  }
+
+  if (!confirmed) {
+    console.error("kk memory reset will permanently delete ALL memories. Re-run with --yes to confirm.");
+    return 1;
+  }
+
+  try {
+    const db = await import("./db.js");
+    await db.initGraphDb(dbPath);
+    const database = db.openDatabase(dbPath);
+
+    try {
+      db.runMigrations(database);
+
+      // DELETE FROM memories (not DROP) — keeps the table and FTS triggers intact.
+      // The memories_fts_delete trigger fires per row, so FTS index is also cleared.
+      const info = database.prepare("DELETE FROM memories").run();
+      const deletedCount = info.changes;
+
+      const result = { status: "ok", deleted_count: deletedCount };
+      emitResult(result, json, (r) => {
+        console.log(`  Reset: ${r.deleted_count} memor${r.deleted_count === 1 ? "y" : "ies"} deleted.`);
+      });
+      return 0;
+    } finally {
+      database.close();
+    }
+  } catch (err) {
+    console.error(`Memory reset failed: ${err instanceof Error ? err.message : err}`);
     return 1;
   }
 }
