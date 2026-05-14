@@ -194,6 +194,51 @@ function GraphInner({ view, nodes: graphNodes, edges: graphEdges }: GraphProps) 
           }}
         />
       </ReactFlow>
+      <MemoryDotLegend />
+    </div>
+  );
+}
+
+/** Tiny corner legend so users know what the node dot indicators mean. */
+function MemoryDotLegend() {
+  return (
+    <div
+      data-testid="memory-dot-legend"
+      className="absolute pointer-events-none text-[11px] flex items-center gap-3"
+      style={{
+        bottom: 8,
+        left: 8,
+        padding: "4px 8px",
+        background: "color-mix(in srgb, var(--bg-elevated) 86%, transparent)",
+        border: "1px solid var(--border)",
+        borderRadius: 4,
+        color: "var(--text-subtle)",
+      }}
+    >
+      <span className="flex items-center gap-1.5">
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: "var(--accent)",
+            display: "inline-block",
+          }}
+        />
+        memory
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: "#f59e0b",
+            display: "inline-block",
+          }}
+        />
+        stale
+      </span>
     </div>
   );
 }
@@ -201,9 +246,11 @@ function GraphInner({ view, nodes: graphNodes, edges: graphEdges }: GraphProps) 
 const NODE_TYPES = { kk: KkNode };
 
 function KkNode({ data, selected }: NodeProps<Node<KkNodeData>>) {
-  const { symbol, kind, changed } = data;
+  const { symbol, kind, changed, memory_count, stale_memory_count } = data;
   const isDirect = (data as KkNodeData & { _isDirect?: boolean })._isDirect === true;
   const shape = shapeFor(kind);
+  const hasMemory = (memory_count ?? 0) > 0;
+  const hasStaleMemory = (stale_memory_count ?? 0) > 0;
 
   const fillStyle: React.CSSProperties = changed
     ? {
@@ -310,6 +357,25 @@ function KkNode({ data, selected }: NodeProps<Node<KkNodeData>>) {
             </div>
           </div>
         </div>
+      )}
+
+      {hasMemory && (
+        <span
+          aria-label={hasStaleMemory ? "memory attached (some stale)" : "memory attached"}
+          data-testid="memory-dot"
+          className="absolute"
+          style={{
+            top: 4,
+            right: 4,
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            // Amber when any memory is stale; otherwise the accent color.
+            background: hasStaleMemory ? "#f59e0b" : "var(--accent)",
+            boxShadow: "0 0 0 1.5px var(--bg-elevated)",
+            pointerEvents: "none",
+          }}
+        />
       )}
     </div>
   );

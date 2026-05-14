@@ -23,6 +23,10 @@ export interface GraphNode {
   file: string;
   line: number;
   changed: boolean;
+  /** Number of memories anchored to this node. Omitted/0 = no indicator. */
+  memory_count?: number;
+  /** Subset of memory_count whose anchor is stale (symbol gone). > 0 turns the indicator amber. */
+  stale_memory_count?: number;
 }
 
 export interface GraphEdge {

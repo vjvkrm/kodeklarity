@@ -12,6 +12,8 @@ export interface KkNodeData extends Record<string, unknown> {
   file: string;
   line: number;
   changed: boolean;
+  memory_count?: number;
+  stale_memory_count?: number;
 }
 
 export interface LayoutResult {
@@ -70,6 +72,8 @@ export function computeLayout(
         file: n.file,
         line: n.line,
         changed: n.changed,
+        memory_count: n.memory_count,
+        stale_memory_count: n.stale_memory_count,
       },
     };
   });
