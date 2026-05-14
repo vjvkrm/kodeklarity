@@ -96,6 +96,13 @@
       "glob": "src/dashboard/web/src/api/client.ts",
       "symbolPattern": "^export\\s+const\\s+api",
       "reason": "Dashboard typed API client"
+    },
+    {
+      "name": "kk_memory",
+      "kind": "service",
+      "glob": "src/memory/**/*.ts",
+      "symbolPattern": "^export\\s+(async\\s+)?function\\s+",
+      "reason": "Shared memory operations core (DRY for CLI + MCP)"
     }
   ],
   "exclude": [
@@ -119,7 +126,7 @@
     "excludeTypeOnlyImports": true
   },
   "_meta": {
-    "generatedAt": "2026-05-06T16:25:07.109Z",
+    "generatedAt": "2026-05-13T21:26:39.830Z",
     "lastModifiedBy": "kk_init",
     "projectName": "kodeklarity"
   }
