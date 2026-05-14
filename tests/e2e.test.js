@@ -74,8 +74,10 @@ describe("e2e: kk init", () => {
     const dbExists = await fs.access(path.join(FIXTURE_PATH, ".kodeklarity", "index", "graph.sqlite")).then(() => true).catch(() => false);
     assert.ok(dbExists, "graph.sqlite should exist");
 
-    const agentExists = await fs.access(path.join(FIXTURE_PATH, ".kodeklarity", "AGENT.md")).then(() => true).catch(() => false);
-    assert.ok(agentExists, "AGENT.md should exist");
+    // Renamed to AGENTS.md (plural) to match the cross-tool community convention
+    // (OpenAI Codex, Cursor, Claude Code all read this name).
+    const agentExists = await fs.access(path.join(FIXTURE_PATH, ".kodeklarity", "AGENTS.md")).then(() => true).catch(() => false);
+    assert.ok(agentExists, "AGENTS.md should exist");
   });
 
   it("detects correct frameworks", async () => {

@@ -1,60 +1,42 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const INSTRUCTIONS_FILE = ".kodeklarity/AGENT.md";
+const INSTRUCTIONS_FILE = ".kodeklarity/AGENTS.md";
 
-const AGENT_INSTRUCTIONS = `# KodeKlarity (\`kk\`) — use it, improve it
+const AGENT_INSTRUCTIONS = `# kk — for AI coding agents
 
-Graph + memory layer. CLI or MCP (identical). Installed as devDependency (\`kodeklarity\`).
+kk is a graph + memory layer for this codebase. The graph is in \`.kodeklarity/index/graph.sqlite\`. Memories anchor to graph nodes (function/route/table symbols) and survive refactors via a re-anchor pass on every rebuild.
 
-**When starting work or after pulling new code:**
-- \`kk_rebuild\` — update the graph to match current code
-- \`kk_impact <symbol>\` / \`kk_upstream <symbol>\` / \`kk_side_effects <symbol>\` — understand what you're about to touch (read the \`memories\` field!)
-- If \`kk_impact\` shows missing connections (e.g., server action calls a service but no service nodes appear), add a \`customBoundary\` rule in \`.kodeklarity/config.json\` matching the whole layer (not one symbol), then \`kk_rebuild --force\`
+Use kk via the MCP tools (\`kk_*\`) or the CLI (\`kk ...\`) — same shape, same output.
 
-**Before every commit (mandatory):**
-- \`kk_precommit\` — analyzes UNCOMMITTED changes only (working tree). Catches orphaned services, unwired code paths, missing table access, breaking changes, and missing tests. Fix all issues it reports before committing. If \`orphans\` are intentional (e.g., new service not wired yet), explain in the commit message.
+## When kk helps most
 
-**Branch / PR review:**
-- \`kk_review --base main\` (or \`kk review --base main --json\`) — analyzes ALL changes since the branch diverged from \`main\` (committed commits + uncommitted edits). Use this for self-review of a feature branch, or to review someone else's PR. Same output shape as \`kk_precommit\`, plus a \`diff_window\` field describing the merge-base and commit count.
-- \`kk_impact <symbol>\` per modified symbol if you want per-caller drill-down; cross-reference each caller's file against the diff to spot incomplete refactors.
+- **Before changing a symbol with many callers** → \`kk_impact <symbol>\` shows downstream callers and any \`memories\` already anchored to that symbol.
+- **Before claiming done** → \`kk_precommit\` returns \`breaking_changes\`, \`orphans\`, \`tables_touched\`, \`coverage_action\`, and any \`memories\` attached to touched nodes. Read each field; act on non-empty ones.
+- **Reviewing a branch / PR** → \`kk_review --base main\` covers everything since the branch diverged.
+- **Finding callers / paths** → \`kk_upstream <symbol>\`, \`kk_why --from A --to B\`. Faster and more accurate than grep for symbol-level questions.
+- **Recalling prior context** → memories surface automatically in \`kk_impact\` / \`kk_precommit\` output. Read them.
 
-**Coverage gaps (both precommit and review):**
-- If the response includes a \`coverage_action\` field, decide each listed file: add a \`customBoundary\` to \`.kodeklarity/config.json\` (it's a real boundary that should be tracked), or add the path to \`ignoreCoverage\` (it's an intentional non-boundary — entry point, type-only file, CLI dispatch, etc.). Then \`kk_init --force\` and re-run until clean. Don't claim done with uncovered files.
+## When to write memory
 
-**Treat structural fields as risk signals (no separate score):**
-- \`breaking_changes\` non-empty → review carefully; existing callers may break
-- \`tables_touched.writes\` non-empty → confirm migration / RLS / audit
-- \`tables_touched.reads\` non-empty → be aware of consumer paths
-- \`orphans\` non-empty → unwired code, confirm intentional or fix
-- \`coverage_action\` present → fix config before claiming done
+Write a memory anchored to a symbol when ANY of these are true and the info isn't visible from reading the code:
 
-**Visual exploration (optional):**
-- \`kk dashboard\` — opens a local web UI for clicking through the precommit/impact graph with diff inspection. Useful when querying by symbol is slower than seeing the layout.
+- **Bug fix where the cause wasn't obvious** → category \`gotcha\`
+- **Choice between approaches that's not documented elsewhere** → category \`decision\`
+- **Code where one wrong line breaks production** → category \`warning\`
+- **External constraint** (rate limit, deadline, undocumented API behavior) → category \`context\`
 
-**Memory discipline:**
-- When you change a function's behavior, check \`kk_memory_read <symbol>\` — if there's a stale memory, update or remove it via \`kk_memory_update\`.
-- When you make a non-obvious decision (why X, not Y), write a memory: \`kk_memory_write\` with category \`decision\` or \`gotcha\`.
-- Write only if all three hold: (1) non-obvious from code, (2) durable (true next month), (3) actionable (next agent behaves differently).
-- Search first (\`kk_memory_search\`); prefer \`kk_memory_update\` over duplicates.
-- Categories: \`gotcha\`, \`decision\`, \`warning\`, \`wiki\` (rare). Worth writing: hidden DB constraints, load-bearing ordering, intentional-looking-like-bug. Not worth: "fixed X", restating code.
-- Remove stale memories — if a memory references a deleted function or changed behavior, delete it. Code and memory must stay consistent.
+Don't write memory for: things obvious from the code, your own actions ("I edited X"), or every tool call. Few, high-signal entries.
 
-**Writing memory effectively:**
-- **Anchor whenever possible.** Pass \`symbol\` to \`kk_memory_write\` (CLI: \`--node <symbol>\`). Anchored memories survive refactors via the re-anchor pass; un-anchored memories don't. If a symbol could plausibly own the memory, use it.
-- **Pick the right category:**
-  - \`gotcha\` — non-obvious thing to watch out for ("retries 3x because upstream rate-limits at 100rpm")
-  - \`decision\` — why something is the way it is ("chose Drizzle over Prisma because of edge-runtime support")
-  - \`warning\` — fragile or dangerous code ("touching this breaks the webhook signature check")
-  - \`context\` — general background that helps reasoning
-  - \`wiki\` — cross-project knowledge that isn't code-specific
-- **Don't write memory for:**
-  - Things obvious from reading the code (function signatures, types, well-named identifiers)
-  - Recap of your own actions ("I edited fetchUser") — that's a commit message, not memory
-  - Every tool call you make — that's noise, not memory. kk is the opposite of capture-everything: write fewer, higher-signal entries.
-- **Repair stale memories.** When \`kk_memory_list_stale\` returns entries, fix the anchor (rename or move) via \`kk_memory_update\`, or delete via \`kk_memory_delete\` if no longer relevant. Don't leave orphaned memories accumulating.
+Always anchor with \`symbol\` (CLI: \`--node <symbol>\`). Anchored memories survive refactors; unanchored don't.
 
-**Full reference:** See https://github.com/vjvkrm/kodeklarity/blob/main/AGENT.md for all commands, config options, graph model, memory system details, and first-run playbook.
+If \`kk_memory_list_stale\` returns entries, the symbol they were anchored to was renamed or deleted. Repair via \`kk_memory_update\` or remove with \`kk_memory_delete\`.
+
+## Configuration
+
+If \`kk_precommit\` reports \`coverage_action\` (files with no boundary nodes), decide each: add a \`customBoundary\` to \`.kodeklarity/config.json\` (real boundary), or add to \`ignoreCoverage\` (entry point / dispatch / types). Then \`kk_init --force\` and re-run.
+
+Full reference: https://github.com/vjvkrm/kodeklarity
 `;
 
 /**
