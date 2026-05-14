@@ -207,6 +207,35 @@ export class UsersController {
   assert.equal(getDec.length, 1);
   assert.equal(getDec[0].appliedTo.kind, "method");
   assert.equal(getDec[0].appliedTo.name, "findOne");
+  // Method decorators must carry their parent class — adapters need this
+  // to scope handlers to their controller (which @Get belongs to which @Controller).
+  assert.equal(getDec[0].appliedTo.parentClass, "UsersController");
+});
+
+test("parseFile decorators handle multiple classes in one file without cross-scoping", async () => {
+  const parseFile = await loadParseFile();
+  const src = `
+import { Controller, Get } from "@nestjs/common";
+
+@Controller("a")
+export class AController {
+  @Get()
+  one() {}
+}
+
+@Controller("b")
+export class BController {
+  @Get()
+  two() {}
+}
+`;
+  const p = parseFile("multi.ts", src);
+  const gets = p.findDecoratorsByName("Get");
+  assert.equal(gets.length, 2);
+  const one = gets.find((d) => d.appliedTo.name === "one");
+  const two = gets.find((d) => d.appliedTo.name === "two");
+  assert.equal(one.appliedTo.parentClass, "AController");
+  assert.equal(two.appliedTo.parentClass, "BController");
 });
 
 test("parseFile handles re-exports (named and *)", async () => {

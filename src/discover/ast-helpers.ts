@@ -86,7 +86,13 @@ export interface ParsedDecorator {
   name: string;
   line: number;
   args: ParsedArg[];
-  appliedTo: { kind: "class" | "method" | "property"; name: string; line: number };
+  appliedTo: {
+    kind: "class" | "method" | "property";
+    name: string;
+    line: number;
+    /** For method/property decorators, the enclosing class name. Needed to scope decorators to their owning class (e.g., which @Get belongs to which @Controller). */
+    parentClass?: string;
+  };
 }
 
 export interface ParsedFile {
@@ -459,16 +465,32 @@ function functionLikeName(node: ts.Node): string | null {
 }
 
 function collectDecorators(sourceFile: ts.SourceFile, results: ParsedDecorator[]): void {
-  const visit = (node: ts.Node) => {
+  // Visit with a `currentClass` context so method/property decorators know their owner.
+  const visit = (node: ts.Node, currentClass: string | undefined) => {
+    let nextClassContext = currentClass;
+    if (ts.isClassDeclaration(node) && node.name) {
+      nextClassContext = node.name.text;
+    }
+
     const decoratorsArr = ts.getDecorators?.(node as any) as readonly ts.Decorator[] | undefined;
     if (decoratorsArr && decoratorsArr.length > 0) {
       let appliedTo: ParsedDecorator["appliedTo"] | null = null;
       if (ts.isClassDeclaration(node) && node.name) {
         appliedTo = { kind: "class", name: node.name.text, line: getLine(sourceFile, node) };
       } else if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
-        appliedTo = { kind: "method", name: node.name.text, line: getLine(sourceFile, node) };
+        appliedTo = {
+          kind: "method",
+          name: node.name.text,
+          line: getLine(sourceFile, node),
+          parentClass: currentClass,
+        };
       } else if (ts.isPropertyDeclaration(node) && ts.isIdentifier(node.name)) {
-        appliedTo = { kind: "property", name: node.name.text, line: getLine(sourceFile, node) };
+        appliedTo = {
+          kind: "property",
+          name: node.name.text,
+          line: getLine(sourceFile, node),
+          parentClass: currentClass,
+        };
       }
       if (appliedTo) {
         for (const dec of decoratorsArr) {
@@ -477,9 +499,9 @@ function collectDecorators(sourceFile: ts.SourceFile, results: ParsedDecorator[]
         }
       }
     }
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, (child) => visit(child, nextClassContext));
   };
-  visit(sourceFile);
+  visit(sourceFile, undefined);
 }
 
 function parseDecorator(sourceFile: ts.SourceFile, dec: ts.Decorator, appliedTo: ParsedDecorator["appliedTo"]): ParsedDecorator | null {
