@@ -54,16 +54,93 @@ Declare on both the adapter export and the `DetectedStack` returned by `detect`:
    - Push `BoundaryEdge`s for framework-specific relationships (e.g., `server_action --revalidates--> page`)
 6. Register the adapter in `src/discover/detector.ts` by importing it and adding to the `ADAPTERS` array.
 
-## Use AST, not regex, where it matters
+## Use `parseFile()`, not regex
 
-Most existing adapters use regex on file contents. That's fast but produces false positives (matches in comments, strings, etc.) and misses non-standard formatting.
+kk ships a small AST helper for adapters at `src/discover/ast-helpers.ts`. Use it. Regex-based detection produces false positives in comments and string literals, can't follow imports, and breaks on non-standard formatting. The helper costs ~1ms per file and eliminates all of that.
 
-For new adapters, prefer `ts.createSourceFile()` (already used in `src/ast.js`, `src/trace.ts`, `src/symbol-diff.ts`) when:
-- You need to find call expressions to a specific imported symbol (e.g., `revalidatePath` from `next/cache`)
-- You need to distinguish identifier usage from string-literal mentions
-- You need to traverse declarations (functions, classes, exports) reliably
+```ts
+import { parseFile } from "../ast-helpers.js";
 
-For simple existence checks (does `app/page.tsx` exist?), filename matching is fine — no AST needed.
+const parsed = parseFile(filePath, fileContent);
+parsed.imports             // [{ source, specifiers, defaultImport, namespaceImport, line }, ...]
+parsed.fileDirectives      // ["use server"] if at top of file
+parsed.exports             // each with kind ("function" | "asyncFunction" | "constArrow" | ...)
+parsed.decorators          // [{ name, args, appliedTo: { kind, name, line } }, ...]
+
+parsed.hasImport("revalidatePath", "next/cache")    // bool — was it imported, from where
+parsed.findCalls("revalidatePath")                  // [{ callee, line, args }, ...]
+parsed.findCallsWithStringArg("revalidatePath")     // ↑ filtered to first-arg string literals
+parsed.containingFunction(line)                     // name of enclosing function, if any
+parsed.findDecoratorsByName("Controller")           // for NestJS-style decorators
+```
+
+### Before / after — Next.js server action detection
+
+**Before** (regex — what the adapter used to do):
+
+```ts
+const hasUseServer = /['"]use server['"]/.test(content);
+if (!hasUseServer) continue;
+
+// Hand-roll a function extractor — misses inline 'use server',
+// matches strings inside other code, etc.
+const exportedFns = extractExportedFunctions(content);
+for (const fn of exportedFns) {
+  nodes.push({ kind: "server_action", symbol: fn.name, ... });
+}
+```
+
+**After** (parseFile — what it does now):
+
+```ts
+const parsed = parseFile(filePath, content);
+const fileLevelServer = parsed.fileDirectives.includes("use server");
+
+for (const exp of parsed.exports) {
+  const isFunctionLike =
+    exp.kind === "function" ||
+    exp.kind === "asyncFunction" ||
+    exp.kind === "constArrow" ||
+    exp.kind === "constAsyncArrow";
+  if (!isFunctionLike) continue;
+
+  // Either the whole file is 'use server', or this specific function's body is.
+  if (!fileLevelServer && exp.bodyDirective !== "use server") continue;
+
+  nodes.push({ kind: "server_action", symbol: exp.name, ... });
+}
+```
+
+The second version is shorter, catches `export const foo = async () => { "use server"; ... }` (modern Next.js 15+ pattern), and produces no false positives from `"use server"` appearing inside a comment or string elsewhere in the file.
+
+### Before / after — `revalidatePath` edges
+
+**Before**:
+
+```ts
+const lines = content.split("\n");
+for (let i = 0; i < lines.length; i++) {
+  const m = lines[i].match(/revalidatePath\s*\(\s*['"]([^'"]+)['"]/);
+  if (!m) continue;
+  // ... then hand-roll findContainingFunction()
+}
+```
+
+**After**:
+
+```ts
+const calls = parsed.findCallsWithStringArg("revalidatePath");
+for (const call of calls) {
+  const containingFn = parsed.containingFunction(call.line);
+  // emit edge from containing server_action to the page with routePath === call.stringArg
+}
+```
+
+### When regex is still fine
+
+`findFiles(workspace, ["app/**/page.tsx"])` — filename glob matching. Don't AST-parse a file just to know it exists.
+
+The `parseFile` cost only matters when you actually want to know what's *inside* the file.
 
 ## Testing
 
