@@ -3,13 +3,14 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const expressAdapter: FrameworkAdapter = {
   name: "express",
+  maturity: "experimental",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "express");
     if (!version) return null;
     // Don't detect if Next.js is present (Next.js has its own routing)
     if (getDepVersion(packageJson, "next")) return null;
-    return { name: "Express", version, adapter: "express" };
+    return { name: "Express", version, adapter: "express", maturity: "experimental" };
   },
 
   async scan(workspace, repoRoot) {

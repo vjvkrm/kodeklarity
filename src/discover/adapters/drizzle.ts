@@ -3,11 +3,12 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const drizzleAdapter: FrameworkAdapter = {
   name: "drizzle",
+  maturity: "stable",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "drizzle-orm");
     if (!version) return null;
-    return { name: "Drizzle ORM", version, adapter: "drizzle" };
+    return { name: "Drizzle ORM", version, adapter: "drizzle", maturity: "stable" };
   },
 
   async scan(workspace, repoRoot) {

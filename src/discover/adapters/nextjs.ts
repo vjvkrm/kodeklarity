@@ -4,11 +4,12 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const nextjsAdapter: FrameworkAdapter = {
   name: "nextjs",
+  maturity: "stable",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "next");
     if (!version) return null;
-    return { name: "Next.js", version, adapter: "nextjs" };
+    return { name: "Next.js", version, adapter: "nextjs", maturity: "stable" };
   },
 
   async scan(workspace, repoRoot) {

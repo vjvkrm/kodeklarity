@@ -3,11 +3,12 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const nestjsAdapter: FrameworkAdapter = {
   name: "nestjs",
+  maturity: "experimental",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "@nestjs/core");
     if (!version) return null;
-    return { name: "NestJS", version, adapter: "nestjs" };
+    return { name: "NestJS", version, adapter: "nestjs", maturity: "experimental" };
   },
 
   async scan(workspace, repoRoot) {

@@ -3,11 +3,12 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const triggerdevAdapter: FrameworkAdapter = {
   name: "triggerdev",
+  maturity: "stable",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "@trigger.dev/sdk");
     if (!version) return null;
-    return { name: "Trigger.dev", version, adapter: "triggerdev" };
+    return { name: "Trigger.dev", version, adapter: "triggerdev", maturity: "stable" };
   },
 
   async scan(workspace, repoRoot) {
