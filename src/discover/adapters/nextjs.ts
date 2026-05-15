@@ -1,14 +1,18 @@
 import path from "node:path";
-import type { FrameworkAdapter, Workspace, AdapterResult, BoundaryNode, BoundaryEdge } from "../types.js";
-import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDepVersion, shouldExclude } from "./utils.js";
+import type { FrameworkAdapter, BoundaryNode, BoundaryEdge } from "../types.js";
+import { findFiles, readFileSafe, toRelative, makeNodeId, getDepVersion, shouldExclude } from "./utils.js";
+import { parseFile } from "../ast-helpers.js";
+
+const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 export const nextjsAdapter: FrameworkAdapter = {
   name: "nextjs",
+  maturity: "stable",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "next");
     if (!version) return null;
-    return { name: "Next.js", version, adapter: "nextjs" };
+    return { name: "Next.js", version, adapter: "nextjs", maturity: "stable" };
   },
 
   async scan(workspace, repoRoot) {
@@ -16,12 +20,11 @@ export const nextjsAdapter: FrameworkAdapter = {
     const edges: BoundaryEdge[] = [];
     const wsRoot = workspace.path;
 
-    // 1. Find pages/routes — app/**/page.{ts,tsx,js,jsx}
+    // 1. Pages — app/**/page.{ts,tsx,js,jsx}
     const pageFiles = await findFiles(wsRoot, [
       "app/**/page.ts", "app/**/page.tsx", "app/**/page.js", "app/**/page.jsx",
       "src/app/**/page.ts", "src/app/**/page.tsx", "src/app/**/page.js", "src/app/**/page.jsx",
     ]);
-
     for (const file of pageFiles) {
       const rel = toRelative(file, repoRoot);
       const routePath = extractRoutePath(file, wsRoot);
@@ -37,105 +40,114 @@ export const nextjsAdapter: FrameworkAdapter = {
       });
     }
 
-    // 2. Find API routes — app/**/route.{ts,tsx,js,jsx}
+    // 2. API routes — app/**/route.{ts,tsx,js,jsx}
     const routeFiles = await findFiles(wsRoot, [
       "app/**/route.ts", "app/**/route.tsx", "app/**/route.js", "app/**/route.jsx",
       "src/app/**/route.ts", "src/app/**/route.tsx", "src/app/**/route.js", "src/app/**/route.jsx",
     ]);
-
     for (const file of routeFiles) {
       const rel = toRelative(file, repoRoot);
       const content = await readFileSafe(file);
       if (!content) continue;
-
+      const parsed = parseFile(file, content);
       const routePath = extractRoutePath(file, wsRoot);
-      const methods = extractHttpMethods(content);
 
-      for (const method of methods) {
-        const line = findLineNumber(content, new RegExp(`export\\s+(async\\s+)?function\\s+${method}\\b`));
+      // HTTP handlers are top-level exported functions named GET/POST/PUT/...
+      const httpHandlers = parsed.exports.filter(
+        (e) =>
+          (e.kind === "function" || e.kind === "asyncFunction") &&
+          HTTP_METHODS.includes(e.name)
+      );
+      for (const handler of httpHandlers) {
         nodes.push({
-          id: makeNodeId("api_route", rel, `${method}:${routePath}`),
+          id: makeNodeId("api_route", rel, `${handler.name}:${routePath}`),
           kind: "api_route",
-          symbol: `${method} ${routePath}`,
+          symbol: `${handler.name} ${routePath}`,
           file: rel,
-          line,
-          reason: `Next.js API route: ${method} ${routePath}`,
+          line: handler.line,
+          reason: `Next.js API route: ${handler.name} ${routePath}`,
           adapter: "nextjs",
-          metadata: { routePath, method, framework: "nextjs" },
+          metadata: { routePath, method: handler.name, framework: "nextjs" },
         });
       }
     }
 
-    // 3. Find server actions — files with 'use server'
+    // 3. Server actions — file-level `"use server"` directive OR functions with
+    //    inline `"use server"` body directive (modern Next 15+ pattern).
     const tsFiles = await findFiles(wsRoot, [
       "**/*.ts", "**/*.tsx",
       "src/**/*.ts", "src/**/*.tsx",
     ]);
-
-    // Filter out node_modules, .next, dist
     const sourceFiles = tsFiles.filter((f) => !shouldExclude(f));
 
     for (const file of sourceFiles) {
       const content = await readFileSafe(file);
       if (!content) continue;
+      // Quick reject: skip parsing if file has no chance of being a server action.
+      if (!content.includes("use server")) continue;
 
-      // Check for 'use server' directive
-      const hasUseServer = /['"]use server['"]/.test(content);
-      if (!hasUseServer) continue;
+      const parsed = parseFile(file, content);
+      const fileLevelServer = parsed.fileDirectives.includes("use server");
 
       const rel = toRelative(file, repoRoot);
+      const actionExports = parsed.exports.filter((e) => {
+        const isFunctionLike =
+          e.kind === "function" ||
+          e.kind === "asyncFunction" ||
+          e.kind === "constArrow" ||
+          e.kind === "constAsyncArrow";
+        if (!isFunctionLike) return false;
+        // Either the whole file is "use server", or the individual function body is.
+        return fileLevelServer || e.bodyDirective === "use server";
+      });
 
-      // Extract exported functions — these are the server actions
-      const exportedFns = extractExportedFunctions(content);
-      for (const fn of exportedFns) {
+      for (const action of actionExports) {
         nodes.push({
-          id: makeNodeId("server_action", rel, fn.name),
+          id: makeNodeId("server_action", rel, action.name),
           kind: "server_action",
-          symbol: fn.name,
+          symbol: action.name,
           file: rel,
-          line: fn.line,
-          reason: `Next.js server action: ${fn.name}`,
+          line: action.line,
+          reason: `Next.js server action: ${action.name}`,
           adapter: "nextjs",
           metadata: { framework: "nextjs" },
         });
       }
 
-      // Check for revalidatePath/revalidateTag calls
-      const revalidations = extractRevalidations(content);
-      for (const rev of revalidations) {
-        // Find which page this revalidation targets
+      // revalidatePath calls — emit `revalidates` edges from the containing
+      // server action node to a matching page node (if any).
+      const revalidateCalls = parsed.findCallsWithStringArg("revalidatePath");
+      for (const call of revalidateCalls) {
         const targetPageNode = nodes.find(
-          (n) => n.kind === "route" && n.metadata?.routePath === rev.path
+          (n) => n.kind === "route" && n.metadata?.routePath === call.stringArg
         );
+        if (!targetPageNode) continue;
 
-        if (targetPageNode) {
-          // Find which server action contains this revalidation
-          const containingAction = findContainingFunction(content, rev.line);
-          const actionNode = nodes.find(
-            (n) => n.kind === "server_action" && n.symbol === containingAction && n.file === rel
-          );
+        const containingFn = parsed.containingFunction(call.line);
+        if (!containingFn) continue;
 
-          if (actionNode) {
-            edges.push({
-              from: actionNode.id,
-              to: targetPageNode.id,
-              edgeType: "revalidates",
-              file: rel,
-              line: rev.line,
-              reason: `Server action ${containingAction} revalidates ${rev.path}`,
-              adapter: "nextjs",
-            });
-          }
-        }
+        const actionNode = nodes.find(
+          (n) => n.kind === "server_action" && n.symbol === containingFn && n.file === rel
+        );
+        if (!actionNode) continue;
+
+        edges.push({
+          from: actionNode.id,
+          to: targetPageNode.id,
+          edgeType: "revalidates",
+          file: rel,
+          line: call.line,
+          reason: `Server action ${containingFn} revalidates ${call.stringArg}`,
+          adapter: "nextjs",
+        });
       }
     }
 
-    // 4. Find middleware
+    // 4. Middleware
     const middlewareFiles = await findFiles(wsRoot, [
       "middleware.ts", "middleware.js",
       "src/middleware.ts", "src/middleware.js",
     ]);
-
     for (const file of middlewareFiles) {
       const rel = toRelative(file, repoRoot);
       nodes.push({
@@ -150,12 +162,11 @@ export const nextjsAdapter: FrameworkAdapter = {
       });
     }
 
-    // 5. Find layouts
+    // 5. Layouts
     const layoutFiles = await findFiles(wsRoot, [
       "app/**/layout.ts", "app/**/layout.tsx",
       "src/app/**/layout.ts", "src/app/**/layout.tsx",
     ]);
-
     for (const file of layoutFiles) {
       const rel = toRelative(file, repoRoot);
       const routePath = extractRoutePath(file, wsRoot);
@@ -185,67 +196,4 @@ function extractRoutePath(filePath: string, wsRoot: string): string {
     .replace(/\(.*?\)\/?/g, "") // Remove route groups like (auth)
     || "/";
   return route.startsWith("/") ? route : `/${route}`;
-}
-
-function extractHttpMethods(content: string): string[] {
-  const methods: string[] = [];
-  const methodNames = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-  for (const method of methodNames) {
-    if (new RegExp(`export\\s+(async\\s+)?function\\s+${method}\\b`).test(content)) {
-      methods.push(method);
-    }
-  }
-  return methods;
-}
-
-function extractExportedFunctions(content: string): Array<{ name: string; line: number }> {
-  const fns: Array<{ name: string; line: number }> = [];
-  const lines = content.split("\n");
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Match: export async function name( or export function name(
-    const match = line.match(/export\s+(?:async\s+)?function\s+(\w+)\s*\(/);
-    if (match) {
-      fns.push({ name: match[1], line: i + 1 });
-      continue;
-    }
-    // Match: export const name = async (
-    const constMatch = line.match(/export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(/);
-    if (constMatch) {
-      fns.push({ name: constMatch[1], line: i + 1 });
-    }
-  }
-
-  return fns;
-}
-
-function extractRevalidations(content: string): Array<{ path: string; line: number; type: string }> {
-  const results: Array<{ path: string; line: number; type: string }> = [];
-  const lines = content.split("\n");
-
-  for (let i = 0; i < lines.length; i++) {
-    const pathMatch = lines[i].match(/revalidatePath\s*\(\s*['"]([^'"]+)['"]/);
-    if (pathMatch) {
-      results.push({ path: pathMatch[1], line: i + 1, type: "path" });
-    }
-    const tagMatch = lines[i].match(/revalidateTag\s*\(\s*['"]([^'"]+)['"]/);
-    if (tagMatch) {
-      results.push({ path: tagMatch[1], line: i + 1, type: "tag" });
-    }
-  }
-
-  return results;
-}
-
-function findContainingFunction(content: string, targetLine: number): string | null {
-  const lines = content.split("\n");
-  // Walk backwards from targetLine to find the nearest function declaration
-  for (let i = targetLine - 1; i >= 0; i--) {
-    const match = lines[i].match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)/);
-    if (match) return match[1];
-    const constMatch = lines[i].match(/(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?\(/);
-    if (constMatch) return constMatch[1];
-  }
-  return null;
 }

@@ -4,10 +4,11 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, should
 /** Generic adapter — catches patterns that aren't framework-specific */
 export const genericAdapter: FrameworkAdapter = {
   name: "generic",
+  maturity: "stable",
 
   detect(_packageJson) {
     // Always active — catches generic patterns
-    return { name: "Generic", version: null, adapter: "generic" };
+    return { name: "Generic", version: null, adapter: "generic", maturity: "stable" };
   },
 
   async scan(workspace, repoRoot) {

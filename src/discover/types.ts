@@ -1,8 +1,12 @@
+/** Maturity signal for adapters. Surfaces in `kk init` output so users know what to expect from each detector. */
+export type AdapterMaturity = "stable" | "experimental" | "community";
+
 /** Detected framework/library in a workspace */
 export interface DetectedStack {
   name: string;
   version: string | null;
   adapter: string; // adapter key: "nextjs", "drizzle", etc.
+  maturity?: AdapterMaturity;
 }
 
 /** A workspace within a monorepo, or the root for single-repo */
@@ -69,9 +73,14 @@ export interface DiscoveryResult {
   };
 }
 
-/** Interface that every framework adapter must implement */
+/** Interface that every framework adapter must implement.
+ *
+ *  `maturity` is optional and defaults to "experimental". First-party adapters
+ *  should declare it explicitly. Community-contributed adapters should default
+ *  to "community" — see docs/CONTRIBUTING-ADAPTERS.md. */
 export interface FrameworkAdapter {
   name: string;
+  maturity?: AdapterMaturity;
   detect(packageJson: Record<string, unknown>): DetectedStack | null;
   scan(workspace: Workspace, repoRoot: string): Promise<AdapterResult>;
 }

@@ -27,17 +27,21 @@ interface InitOptions {
 function formatHumanOutput(result: DiscoveryResult, gitSha: string | null): void {
   console.log("");
 
-  // Workspace info
+  // Workspace info — annotate non-stable adapters so users know what to expect.
+  const formatStack = (stack: Array<{ name: string; maturity?: string }>) =>
+    stack
+      .map((s) =>
+        s.maturity && s.maturity !== "stable" ? `${s.name} (${s.maturity})` : s.name,
+      )
+      .join(", ");
   if (result.workspaces.length === 1 && result.workspaces[0].relativePath === ".") {
     const ws = result.workspaces[0];
-    const stackNames = ws.stack.map((s) => s.name).join(", ");
     console.log(`  Project: ${ws.name}`);
-    console.log(`  Stack:   ${stackNames || "TypeScript"}`);
+    console.log(`  Stack:   ${formatStack(ws.stack) || "TypeScript"}`);
   } else {
     console.log(`  Monorepo: ${result.workspaces.length} workspaces`);
     for (const ws of result.workspaces) {
-      const stackNames = ws.stack.map((s) => s.name).join(", ");
-      console.log(`    ${ws.relativePath.padEnd(30)} → ${stackNames || "TypeScript"}`);
+      console.log(`    ${ws.relativePath.padEnd(30)} → ${formatStack(ws.stack) || "TypeScript"}`);
     }
   }
 
@@ -100,7 +104,7 @@ function buildJsonOutput(result: DiscoveryResult, gitSha: string | null): Record
     workspaces: result.workspaces.map((ws) => ({
       name: ws.name,
       path: ws.relativePath,
-      stack: ws.stack.map((s) => ({ name: s.name, version: s.version, adapter: s.adapter })),
+      stack: ws.stack.map((s) => ({ name: s.name, version: s.version, adapter: s.adapter, maturity: s.maturity ?? null })),
     })),
     graph: {
       nodes: result.nodes.length,

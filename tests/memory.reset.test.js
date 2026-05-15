@@ -151,15 +151,22 @@ test("kk memory reset --yes --json returns parseable JSON with status ok", async
   assert.ok(payload.deleted_count >= 2);
 });
 
-test("writeAgentInstructions template includes 'Writing memory effectively' guidance", async () => {
+test("writeAgentInstructions writes AGENTS.md (plural) with memory-write triggers", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kk-agent-instr-"));
   try {
     const mod = await import(path.join(REPO_ROOT, "dist", "src", "agent-instructions.js"));
     const written = await mod.writeAgentInstructions(tmp);
     assert.ok(written, "expected file path on first write");
+    // Filename is now plural to match the cross-tool community convention
+    // (OpenAI Codex, Cursor, Claude Code all read AGENTS.md).
+    assert.ok(written.endsWith("AGENTS.md"), `expected AGENTS.md, got ${written}`);
     const contents = await fs.readFile(written, "utf8");
-    assert.match(contents, /Writing memory effectively/);
-    assert.match(contents, /Anchor whenever possible/);
+    // Sanity-check the four memory-write triggers and the anti-trigger.
+    assert.match(contents, /When to write memory/);
+    assert.match(contents, /gotcha/);
+    assert.match(contents, /decision/);
+    assert.match(contents, /warning/);
+    assert.match(contents, /context/);
     assert.match(contents, /Don't write memory for/);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});

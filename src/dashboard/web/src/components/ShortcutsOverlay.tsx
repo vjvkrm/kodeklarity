@@ -68,6 +68,41 @@ export default function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProp
             </li>
           ))}
         </ul>
+
+        <div
+          className="px-5 py-3"
+          style={{ borderTop: "1px solid var(--border)" }}
+        >
+          <div className="text-[11px] uppercase tracking-wide text-muted mb-2">
+            Node indicators
+          </div>
+          <ul className="space-y-1.5">
+            <li className="flex items-center gap-2 text-[13px] text-muted">
+              <span
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "var(--accent)",
+                  display: "inline-block",
+                }}
+              />
+              Memory attached to this node
+            </li>
+            <li className="flex items-center gap-2 text-[13px] text-muted">
+              <span
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "#f59e0b",
+                  display: "inline-block",
+                }}
+              />
+              Stale memory — anchor symbol no longer in the graph
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   );

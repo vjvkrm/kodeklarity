@@ -12,6 +12,10 @@ export interface DashboardNode {
   file: string;
   line: number;
   changed: boolean;
+  /** Total memories anchored to this node. Omit / 0 when nothing is attached. */
+  memory_count?: number;
+  /** Subset of memory_count whose anchor is currently stale (symbol gone). Drives the warning state on the indicator dot. */
+  stale_memory_count?: number;
 }
 
 export interface DashboardEdge {
@@ -121,6 +125,63 @@ async function getDbModule(): Promise<DbModule> {
   return (await import("../db.js")) as unknown as DbModule;
 }
 
+/**
+ * Look up memory counts per node so the dashboard can render a "memory attached"
+ * indicator. Returns an empty map when the schema doesn't have the memories
+ * table yet (very old DBs) or no node IDs were requested. Cheap — one indexed
+ * GROUP BY per call.
+ */
+function fetchMemoryCounts(
+  db: any,
+  nodeIds: string[],
+): Map<string, { memory_count: number; stale_memory_count: number }> {
+  const result = new Map<string, { memory_count: number; stale_memory_count: number }>();
+  if (nodeIds.length === 0) return result;
+  // Defensive: if the memories table isn't present (shouldn't happen post-migration
+  // 004, but cheap insurance for very old DBs), return empty.
+  try {
+    const placeholders = nodeIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT node_id,
+                COUNT(*)              AS memory_count,
+                COALESCE(SUM(stale), 0) AS stale_memory_count
+         FROM memories
+         WHERE node_id IN (${placeholders})
+         GROUP BY node_id`,
+      )
+      .all(...nodeIds) as Array<{
+      node_id: string;
+      memory_count: number;
+      stale_memory_count: number;
+    }>;
+    for (const r of rows) {
+      result.set(r.node_id, {
+        memory_count: r.memory_count,
+        stale_memory_count: r.stale_memory_count,
+      });
+    }
+  } catch {
+    // Table missing or column missing — return empty; nodes will simply
+    // render without the indicator.
+  }
+  return result;
+}
+
+/** Annotate nodes in place with memory_count / stale_memory_count from a counts map. */
+function attachMemoryCounts(
+  nodes: DashboardNode[],
+  counts: Map<string, { memory_count: number; stale_memory_count: number }>,
+): void {
+  for (const n of nodes) {
+    const c = counts.get(n.node_id);
+    if (c && c.memory_count > 0) {
+      n.memory_count = c.memory_count;
+      n.stale_memory_count = c.stale_memory_count;
+    }
+  }
+}
+
 function buildNewNodes(reviewResult: ReviewLite): DashboardNode[] {
   return reviewResult.new_symbols.map((s) => ({
     node_id: `__new__:${s.file}:${s.symbol}`,
@@ -185,6 +246,7 @@ export async function buildPrecommitGraph(cwd: string): Promise<PrecommitRespons
   let existingNodes: DashboardNode[] = [];
   let existingEdges: DashboardEdge[] = [];
 
+  let memoryCounts = new Map<string, { memory_count: number; stale_memory_count: number }>();
   if (review.touched_node_ids.length > 0) {
     await initGraphDb(dbPath);
     const db = openDatabase(dbPath);
@@ -208,6 +270,8 @@ export async function buildPrecommitGraph(cwd: string): Promise<PrecommitRespons
              AND to_node_id IN (${placeholders})`,
         )
         .all(GLOBAL_FEATURE, ...review.touched_node_ids, ...review.touched_node_ids) as DashboardEdge[];
+
+      memoryCounts = fetchMemoryCounts(db, review.touched_node_ids);
     } finally {
       db.close();
     }
@@ -215,6 +279,7 @@ export async function buildPrecommitGraph(cwd: string): Promise<PrecommitRespons
 
   const newNodes = buildNewNodes(review);
   const allNodes = dedupeNodes([...existingNodes, ...newNodes]);
+  attachMemoryCounts(allNodes, memoryCounts);
   const newEdges = buildNewEdges(review, allNodes);
   const allEdges = dedupeEdges([...existingEdges, ...newEdges]);
 
@@ -295,6 +360,18 @@ export async function buildImpactGraph(cwd: string): Promise<ImpactResponse> {
             .all(GLOBAL_FEATURE, ...neighborArr) as Array<Omit<DashboardNode, "changed">>
         ).map((n) => ({ ...n, changed: false }));
         for (const n of neighborNodes) nodesById.set(n.node_id, n);
+      }
+
+      // Memory counts for the whole impact set (changed + neighbors). Indicator
+      // is just as useful on a neighbor as on a changed node.
+      const allNodeIds = [...nodesById.keys()];
+      const counts = fetchMemoryCounts(db, allNodeIds);
+      for (const n of nodesById.values()) {
+        const c = counts.get(n.node_id);
+        if (c && c.memory_count > 0) {
+          n.memory_count = c.memory_count;
+          n.stale_memory_count = c.stale_memory_count;
+        }
       }
     } finally {
       db.close();

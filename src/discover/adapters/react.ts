@@ -3,13 +3,14 @@ import { findFiles, readFileSafe, findLineNumber, toRelative, makeNodeId, getDep
 
 export const reactAdapter: FrameworkAdapter = {
   name: "react",
+  maturity: "experimental",
 
   detect(packageJson) {
     const version = getDepVersion(packageJson, "react");
     if (!version) return null;
     // Don't add React adapter if Next.js is present (Next.js adapter handles React)
     if (getDepVersion(packageJson, "next")) return null;
-    return { name: "React", version, adapter: "react" };
+    return { name: "React", version, adapter: "react", maturity: "experimental" };
   },
 
   async scan(workspace, repoRoot) {
