@@ -3,6 +3,7 @@ node_modules/
 # The graph DB and per-machine artefacts under it stay local.
 .kodeklarity/index/
 .kodeklarity/AGENT.md
+.kodeklarity/AGENTS.md
 .kodeklarity/cache/
 .claude/
 .vscode/

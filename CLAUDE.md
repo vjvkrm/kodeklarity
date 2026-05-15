@@ -4,7 +4,7 @@ You are working on **KodeKlarity itself** (the `kk` / `kk-mcp` package). This is
 
 ## Context
 
-KodeKlarity is a code graph + agent memory layer for TypeScript projects. See `README.md` for the user-facing pitch, `AGENT.md` for the full agent guide that users reference in their projects.
+KodeKlarity is a code graph + agent memory layer for TypeScript projects. See `README.md` for the user-facing pitch, `AGENTS.md` for the full agent guide that users reference in their projects.
 
 - CLI entry: `bin/kk.js` → `src/cli.js` → `src/commands.ts`
 - MCP entry: `bin/kk-mcp.ts` → `src/mcp-server.ts`

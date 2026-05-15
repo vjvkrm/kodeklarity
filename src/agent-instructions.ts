@@ -25,6 +25,7 @@ Write a memory anchored to a symbol when ANY of these are true and the info isn'
 - **Choice between approaches that's not documented elsewhere** → category \`decision\`
 - **Code where one wrong line breaks production** → category \`warning\`
 - **External constraint** (rate limit, deadline, undocumented API behavior) → category \`context\`
+- **Cross-project knowledge not tied to a symbol** → category \`wiki\` (rare; use without \`--symbol\`)
 
 Don't write memory for: things obvious from the code, your own actions ("I edited X"), or every tool call. Few, high-signal entries.
 
@@ -52,6 +53,20 @@ export async function writeAgentInstructions(repoRoot: string): Promise<string |
     return null; // Already exists
   } catch {
     // Doesn't exist — create it
+  }
+
+  // Migrate from the legacy singular filename if it's the only one present.
+  // Previous kk versions (<= v0.3.x) wrote .kodeklarity/AGENT.md. We rename
+  // it to AGENTS.md (plural — community convention as of 2026) rather than
+  // creating a second file, so the user keeps any customizations they made.
+  const legacyPath = path.join(repoRoot, ".kodeklarity", "AGENT.md");
+  try {
+    await fs.access(legacyPath);
+    // Legacy exists, new doesn't (we returned null above if it did).
+    await fs.rename(legacyPath, filePath);
+    return filePath;
+  } catch {
+    // No legacy file — fall through and write a fresh template.
   }
 
   const dir = path.dirname(filePath);
