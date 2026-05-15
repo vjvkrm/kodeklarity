@@ -19,7 +19,7 @@ See `CLAUDE.md` for invariants (especially: the `memories` table is never wiped 
 
 ```bash
 npm run build
-npm test         # ~10s, 96 tests across 21 suites — keep green
+npm test         # ~10s — keep green
 ```
 
 ## What we welcome
