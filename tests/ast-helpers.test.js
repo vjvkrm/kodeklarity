@@ -265,6 +265,45 @@ export const Hello = () => <div>hi</div>;
   assert.equal(hello.kind, "constArrow");
 });
 
+test("parseFile classifies `export default function foo()` as kind 'default'", async () => {
+  const parseFile = await loadParseFile();
+  const src = `export default function foo() { return 1; }`;
+  const p = parseFile("a.ts", src);
+  const foo = p.exports.find((e) => e.name === "foo");
+  assert.ok(foo, "default-exported named function should appear in exports");
+  assert.equal(foo.kind, "default", "must be kind 'default', not 'function'");
+});
+
+test("parseFile classifies `export default class Foo {}` as kind 'default'", async () => {
+  const parseFile = await loadParseFile();
+  const src = `export default class Foo {}`;
+  const p = parseFile("a.ts", src);
+  const foo = p.exports.find((e) => e.name === "Foo");
+  assert.ok(foo, "default-exported named class should appear in exports");
+  assert.equal(foo.kind, "default", "must be kind 'default', not 'class'");
+});
+
+test("parseFile classifies `export { foo }` (no from) as 'const', not 'reExport'", async () => {
+  const parseFile = await loadParseFile();
+  const src = `
+function foo() {}
+export { foo };
+`;
+  const p = parseFile("a.ts", src);
+  const exp = p.exports.find((e) => e.name === "foo");
+  assert.ok(exp, "named export of local binding should appear");
+  assert.notEqual(exp.kind, "reExport", "local `export { foo }` is not a re-export");
+});
+
+test("parseFile still classifies `export { foo } from \"./x\"` as 'reExport'", async () => {
+  const parseFile = await loadParseFile();
+  const src = `export { foo } from "./x";`;
+  const p = parseFile("a.ts", src);
+  const exp = p.exports.find((e) => e.name === "foo");
+  assert.ok(exp);
+  assert.equal(exp.kind, "reExport");
+});
+
 test("parseFile object-literal args expose key→string-literal properties", async () => {
   const parseFile = await loadParseFile();
   const src = `task({ id: "send-email", retries: 3, foo: bar });`;

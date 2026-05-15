@@ -323,6 +323,27 @@ function hasAsyncModifier(node: ts.Node): boolean {
 }
 
 function parseExport(sourceFile: ts.SourceFile, stmt: ts.Statement): ParsedExport | null {
+  // export default function foo() {} | export default function() {}
+  // Must come BEFORE the generic export-function branch because the modifier
+  // list contains both ExportKeyword and DefaultKeyword for default-exported
+  // declarations.
+  if (ts.isFunctionDeclaration(stmt) && hasDefaultModifier(stmt)) {
+    const bodyDirective = stmt.body ? isFunctionBodyDirective(stmt.body.statements[0]) : undefined;
+    return {
+      name: stmt.name ? stmt.name.text : "default",
+      line: getLine(sourceFile, stmt),
+      kind: "default",
+      bodyDirective,
+    };
+  }
+  // export default class Foo {} — same reasoning.
+  if (ts.isClassDeclaration(stmt) && hasDefaultModifier(stmt)) {
+    return {
+      name: stmt.name ? stmt.name.text : "default",
+      line: getLine(sourceFile, stmt),
+      kind: "default",
+    };
+  }
   // export function foo() { ... }
   if (ts.isFunctionDeclaration(stmt) && hasExportModifier(stmt) && stmt.name) {
     const bodyDirective = stmt.body ? isFunctionBodyDirective(stmt.body.statements[0]) : undefined;
@@ -333,16 +354,7 @@ function parseExport(sourceFile: ts.SourceFile, stmt: ts.Statement): ParsedExpor
       bodyDirective,
     };
   }
-  // export default function foo() {} | export default <expr>
-  if (ts.isFunctionDeclaration(stmt) && hasDefaultModifier(stmt)) {
-    const bodyDirective = stmt.body ? isFunctionBodyDirective(stmt.body.statements[0]) : undefined;
-    return {
-      name: stmt.name ? stmt.name.text : "default",
-      line: getLine(sourceFile, stmt),
-      kind: "default",
-      bodyDirective,
-    };
-  }
+  // export default <expr>
   if (ts.isExportAssignment(stmt)) {
     return {
       name: "default",
@@ -362,15 +374,20 @@ function parseExport(sourceFile: ts.SourceFile, stmt: ts.Statement): ParsedExpor
   if (ts.isTypeAliasDeclaration(stmt) && hasExportModifier(stmt)) {
     return { name: stmt.name.text, line: getLine(sourceFile, stmt), kind: "type" };
   }
-  // export * from "..." | export { foo } from "..."
+  // export * from "..." | export { foo } from "..." | export { foo }
   if (ts.isExportDeclaration(stmt)) {
-    // We surface re-exports as exports too, named when possible.
+    // Distinguish re-exports (have a `from` clause) from local named exports.
+    const isReExport = !!stmt.moduleSpecifier;
     if (stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
-      // Return the first one — multi-symbol re-exports are uncommon and adapters rarely need them.
-      // For full coverage, callers can iterate sourceFile.statements directly.
       const first = stmt.exportClause.elements[0];
       if (first) {
-        return { name: first.name.text, line: getLine(sourceFile, stmt), kind: "reExport" };
+        return {
+          name: first.name.text,
+          line: getLine(sourceFile, stmt),
+          // Local `export { foo }` is just a const-equivalent export of a local
+          // binding; "reExport" misleads adapters that filter by source.
+          kind: isReExport ? "reExport" : "const",
+        };
       }
     }
     return { name: "*", line: getLine(sourceFile, stmt), kind: "reExport" };
