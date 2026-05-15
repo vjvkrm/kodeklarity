@@ -200,6 +200,62 @@ export class AppModule {}
   }
 });
 
+test("nestjs adapter: @Controller(\"users\") + @Get() yields 'GET /users' (no trailing slash)", async () => {
+  // The migration commit message claims this trailing-slash quirk was fixed.
+  // Pin it.
+  const adapter = await loadAdapter();
+  const tmp = await makeFixture({
+    "src/users.controller.ts": `
+import { Controller, Get } from "@nestjs/common";
+
+@Controller("users")
+export class UsersController {
+  @Get()
+  findAll() {}
+}
+`,
+  });
+  try {
+    const workspace = {
+      name: "fixture", path: tmp, relativePath: ".",
+      packageJson: { dependencies: { "@nestjs/core": "10.0.0" } }, stack: [],
+    };
+    const result = await adapter.scan(workspace, tmp);
+    const routes = result.nodes.filter((n) => n.kind === "api_route");
+    assert.equal(routes.length, 1);
+    assert.equal(routes[0].symbol, "GET /users", "empty routePath must not produce trailing slash");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("nestjs adapter: @Controller() with no arg + @Get() with no arg yields 'GET /'", async () => {
+  const adapter = await loadAdapter();
+  const tmp = await makeFixture({
+    "src/root.controller.ts": `
+import { Controller, Get } from "@nestjs/common";
+
+@Controller()
+export class RootController {
+  @Get()
+  root() {}
+}
+`,
+  });
+  try {
+    const workspace = {
+      name: "fixture", path: tmp, relativePath: ".",
+      packageJson: { dependencies: { "@nestjs/core": "10.0.0" } }, stack: [],
+    };
+    const result = await adapter.scan(workspace, tmp);
+    const routes = result.nodes.filter((n) => n.kind === "api_route");
+    assert.equal(routes.length, 1);
+    assert.equal(routes[0].symbol, "GET /", "empty prefix + empty path should be '/'");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("nestjs adapter: @UseGuards(A, B) → one guard node per identifier", async () => {
   const adapter = await loadAdapter();
   const tmp = await makeFixture({
