@@ -199,14 +199,16 @@ function GraphInner({ view, nodes: graphNodes, edges: graphEdges }: GraphProps) 
   );
 }
 
-/** Tiny corner legend so users know what the node dot indicators mean. */
+/** Tiny corner legend so users know what the node dot indicators mean.
+ *  Positioned top-left to avoid collisions with React Flow's default Controls
+ *  (bottom-left) and MiniMap (bottom-right). */
 function MemoryDotLegend() {
   return (
     <div
       data-testid="memory-dot-legend"
       className="absolute pointer-events-none text-[11px] flex items-center gap-3"
       style={{
-        bottom: 8,
+        top: 8,
         left: 8,
         padding: "4px 8px",
         background: "color-mix(in srgb, var(--bg-elevated) 86%, transparent)",
@@ -361,20 +363,36 @@ function KkNode({ data, selected }: NodeProps<Node<KkNodeData>>) {
 
       {hasMemory && (
         <span
+          role="img"
           aria-label={hasStaleMemory ? "memory attached (some stale)" : "memory attached"}
           data-testid="memory-dot"
           className="absolute"
-          style={{
-            top: 4,
-            right: 4,
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            // Amber when any memory is stale; otherwise the accent color.
-            background: hasStaleMemory ? "#f59e0b" : "var(--accent)",
-            boxShadow: "0 0 0 1.5px var(--bg-elevated)",
-            pointerEvents: "none",
-          }}
+          style={
+            // Diamonds clip to a rotated 70%-wide square — a top-right corner
+            // dot floats outside the visible silhouette. Place inside the
+            // diamond's actual visible area near the top point.
+            shape === "diamond"
+              ? {
+                  top: 12,
+                  right: 95,
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: hasStaleMemory ? "#f59e0b" : "var(--accent)",
+                  boxShadow: "0 0 0 1.5px var(--bg-elevated)",
+                  pointerEvents: "none",
+                }
+              : {
+                  top: 4,
+                  right: 4,
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: hasStaleMemory ? "#f59e0b" : "var(--accent)",
+                  boxShadow: "0 0 0 1.5px var(--bg-elevated)",
+                  pointerEvents: "none",
+                }
+          }
         />
       )}
     </div>
